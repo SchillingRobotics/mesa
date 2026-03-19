@@ -147,6 +147,7 @@ $machines = {
           },
         ],
         :fdtaddr => "/bits/ 64 <0x6fff0000>",
+        :fw_env => "/dev/mmcblk0p3 0x0 0x10000 0x10000\n/dev/mmcblk0p4 0x0 0x10000 0x10000\n",
         :rootfs => "#{$bsp}/arm64-armv8_a-linux-gnu/xstax/release/rootfs.tar",
     },
 
