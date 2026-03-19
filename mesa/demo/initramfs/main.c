@@ -310,7 +310,27 @@ void change_root(const char *dev)
         cnt += 1;
     }
 
-    FATAL(mount(dev, "/mnt", "ext4", 0, 0), "Failed to mount next rootfs");
+    /* New: retry mount on transient errors */
+    {
+        int tries;
+        for (tries = 0; tries < 10; tries++) {
+            errno = 0;
+            if (mount(dev, "/mnt", "ext4", 0, 0) == 0)
+                break;
+
+            if (errno == ENXIO || errno == ENODEV || errno == EAGAIN || errno == EBUSY) {
+                usleep(200000);  // 200 ms
+                continue;
+            }
+
+            // Non‑transient error: bail out immediately
+            fatal_(__LINE__, "Failed to mount next rootfs");
+        }
+        if (tries == 10) {
+            fatal_(__LINE__, "Failed to mount next rootfs");
+        }
+    }
+
     FATAL(chdir("/mnt"), "Failed to change dir");
     FATAL(pivot_root("/mnt", "/mnt/mnt"), "pivot_root failed");
 
