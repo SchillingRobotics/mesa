@@ -2238,9 +2238,11 @@ meba_inst_t meba_initialize(size_t callouts_size, const meba_board_interface_t *
         fprintf(stderr, "Could not read pcb type\n");
         goto error_out;
     }
+    T_I(inst, "MEBA init dispatch: pcb=0x%x target=0x%x", pcb, inst->props.target);
     if (pcb == BOARD_TYPE_SUNRISE || pcb == BOARD_TYPE_LAGUNA_PCB8398 ||
         pcb == BOARD_TYPE_LAGUNA_PCB8422) {
         // Laguna design
+        T_I(inst, "Dispatching to lan969x_initialize() for pcb=0x%x", pcb);
         return lan969x_initialize(inst, callouts);
     }
 

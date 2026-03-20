@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: MIT
 
 #include <stdio.h>
+#include <getopt.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <linux/i2c.h>     /* I2C support */
 #include <linux/i2c-dev.h> /* I2C support */
 #include <unistd.h>
+#include <stdlib.h>
+#include <sys/time.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -45,6 +48,45 @@ static mscc_appl_trace_group_t trace_groups[TRACE_GROUP_CNT] = {
 static mscc_appl_init_t appl_init;
 static void             init_modules(mscc_appl_init_t *init);
 
+static uint64_t monotonic_ms(void)
+{
+    struct timeval tv = {0, 0};
+    if (gettimeofday(&tv, NULL) != 0) {
+        return 0;
+    }
+    return ((uint64_t)tv.tv_sec * 1000ULL) + ((uint64_t)tv.tv_usec / 1000ULL);
+}
+
+static int stop_stage_get(void)
+{
+    const char *s = getenv("MESA_STOP_AFTER_STAGE");
+    long        v;
+    char       *end = NULL;
+
+    if (s == NULL || *s == '\0') {
+        return -1;
+    }
+
+    errno = 0;
+    v = strtol(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0' || v < 0 || v > 1000) {
+        T_E("Invalid MESA_STOP_AFTER_STAGE='%s'", s);
+        return -1;
+    }
+
+    return (int)v;
+}
+
+static int stop_stage_hit(int stop_stage, int stage, const char *name)
+{
+    if (stop_stage == stage) {
+        T_I("Stop stage hit: %d (%s). Exiting cleanly.", stage, name);
+        return 1;
+    }
+
+    return 0;
+}
+
 void *vtss_os_malloc(size_t size, vtss_mem_flags_t flags)
 {
     if (flags == VTSS_MEM_FLAGS_DMA) {
@@ -77,16 +119,35 @@ static int i2c_adapter_open(int adapter_nr, int i2c_addr)
     char filename[20]; /* 20 char should be enough for holding the file name */
     int  file;
 
-    snprintf(filename, sizeof(filename), "/dev/i2c-%d", adapter_nr);
-    if ((file = open(filename, O_RDWR)) >= 0) {
-        T_I("Opened(%s)", filename);
-        if (ioctl(file, I2C_SLAVE, i2c_addr) < 0) {
-            T_I("cannot specify i2c slave at 0x%02x! [%s]\n", i2c_addr, strerror(errno));
+    /* Try requested numbering first. If that fails, try the alternate
+     * scheme used on some boards (100+port vs. raw port numbering). */
+    int candidates[2] = {adapter_nr, (adapter_nr >= 100 ? adapter_nr - 100 : adapter_nr + 100)};
+    int idx;
+
+    for (idx = 0; idx < 2; idx++) {
+        int cand = candidates[idx];
+
+        if (idx == 1 && candidates[1] == candidates[0]) {
+            continue;
         }
-    } else {
-        T_I("cannot open /dev/i2c-%d! [%s]\n", adapter_nr, strerror(errno));
+
+        snprintf(filename, sizeof(filename), "/dev/i2c-%d", cand);
+        if ((file = open(filename, O_RDWR)) >= 0) {
+            T_I("Opened(%s)", filename);
+            if (ioctl(file, I2C_SLAVE, i2c_addr) < 0) {
+                T_I("cannot specify i2c slave at 0x%02x! [%s]\n", i2c_addr, strerror(errno));
+            }
+            return file;
+        }
+
+        if (idx == 0) {
+            T_I("cannot open /dev/i2c-%d, trying alternate numbering", cand);
+        } else {
+            T_I("cannot open /dev/i2c-%d! [%s]\n", cand, strerror(errno));
+        }
     }
-    return file;
+
+    return -1;
 }
 
 /**
@@ -387,7 +448,11 @@ static mesa_rc board_dtree_get(const char *tag, char *buf, size_t bufsize, size_
 {
     int    fd;
     char   fname[128];
-    size_t n;
+    ssize_t n;
+
+    if (bufsize == 0) {
+        return MESA_RC_ERROR;
+    }
 
     sprintf(fname, "/proc/device-tree/meba/%s", tag);
     if ((fd = open(fname, O_RDONLY)) < 0) {
@@ -395,13 +460,13 @@ static mesa_rc board_dtree_get(const char *tag, char *buf, size_t bufsize, size_
         return MESA_RC_ERROR;
     }
 
-    if ((n = read(fd, buf, bufsize)) < 0) {
+    if ((n = read(fd, buf, bufsize - 1)) < 0) {
         n = 0;
     }
-    buf[n] = 0;
+    buf[(size_t)n] = 0;
     close(fd);
     if (buflen) {
-        *buflen = n;
+        *buflen = (size_t)n;
     }
     T_D("dt tag %s: %s", tag, buf);
     return MESA_RC_OK;
@@ -1011,6 +1076,8 @@ int main(int argc, char **argv)
     reg_read_t         reg_read;
     reg_write_t        reg_write;
     uint32_t           sleep_us = 10000, poll_cnt = 0;
+    uint64_t           t0, t1;
+    int                stop_stage;
 
     if (mesa_capability(NULL, MESA_CAP_PORT_KR_IRQ)) {
         sleep_us = 200;
@@ -1022,6 +1089,10 @@ int main(int argc, char **argv)
 
     // Parse options
     main_parse_options(argc, argv);
+    stop_stage = stop_stage_get();
+    if (stop_stage >= 0) {
+        T_I("Stop stage enabled: %d", stop_stage);
+    }
 
     if (!run_in_foreground) {
         if (daemon(0, 1) < 0) {
@@ -1081,19 +1152,44 @@ int main(int argc, char **argv)
     }
     init->board_inst = meba_inst;
     T_D("MEBA Instantiated");
+    if (stop_stage_hit(stop_stage, 1, "after meba_initialize")) {
+        return 0;
+    }
 
     // Create API instance
+    t0 = monotonic_ms();
+    T_I("main: before mesa_inst_get");
     mesa_inst_get(meba_inst->props.target, &create);
+    t1 = monotonic_ms();
+    T_I("main: after mesa_inst_get (%llums)", (unsigned long long)(t1 - t0));
+    if (stop_stage_hit(stop_stage, 2, "after mesa_inst_get")) {
+        return 0;
+    }
+
+    t0 = monotonic_ms();
+    T_I("main: before mesa_inst_create");
     if (mesa_inst_create(&create, NULL) != MESA_RC_OK) {
         T_E("API Failed to Instantiate");
         return 1;
     }
+    t1 = monotonic_ms();
+    T_I("main: after mesa_inst_create (%llums)", (unsigned long long)(t1 - t0));
     T_D("API Instantiated");
+    if (stop_stage_hit(stop_stage, 3, "after mesa_inst_create")) {
+        return 0;
+    }
 
     // Initialize API instance
+    t0 = monotonic_ms();
+    T_I("main: before mesa_init_conf_get");
     if (mesa_init_conf_get(NULL, &conf) != MESA_RC_OK) {
         T_E("mesa_init_conf_get() failed");
         return 1;
+    }
+    t1 = monotonic_ms();
+    T_I("main: after mesa_init_conf_get (%llums)", (unsigned long long)(t1 - t0));
+    if (stop_stage_hit(stop_stage, 4, "after mesa_init_conf_get")) {
+        return 0;
     }
     conf.reg_read = board_info.reg_read;
     conf.reg_write = board_info.reg_write;
@@ -1110,14 +1206,29 @@ int main(int argc, char **argv)
         conf.core_clock.ref_freq = meba_inst->props.ref_freq;
     }
 
+    t0 = monotonic_ms();
+    T_I("main: before mesa_init_conf_set");
     if (mesa_init_conf_set(NULL, &conf) != MESA_RC_OK) {
         T_E("mesa_init_conf_set() failed");
         return 1;
     }
+    t1 = monotonic_ms();
+    T_I("main: after mesa_init_conf_set (%llums)", (unsigned long long)(t1 - t0));
     T_D("API initialized");
+    if (stop_stage_hit(stop_stage, 5, "after mesa_init_conf_set")) {
+        return 0;
+    }
 
     // Do a board init before the port map is established in case of any changes
+    t0 = monotonic_ms();
+    T_I("main: before meba_reset(MEBA_BOARD_INITIALIZE)");
     MEBA_WRAP(meba_reset, init->board_inst, MEBA_BOARD_INITIALIZE);
+    t1 = monotonic_ms();
+    T_I("main: after meba_reset(MEBA_BOARD_INITIALIZE) (%llums)",
+        (unsigned long long)(t1 - t0));
+    if (stop_stage_hit(stop_stage, 6, "after meba_reset(MEBA_BOARD_INITIALIZE)")) {
+        return 0;
+    }
 
     // Setup port mapping
     if ((port_map = calloc(port_cnt, sizeof(*port_map))) == NULL) {
@@ -1131,20 +1242,34 @@ int main(int argc, char **argv)
         }
         port_map[port_no] = port_entry.map;
     }
+    t0 = monotonic_ms();
+    T_I("main: before mesa_port_map_set");
     rc = mesa_port_map_set(NULL, port_cnt, port_map);
     free(port_map);
     if (rc != MESA_RC_OK) {
         T_E("mesa_port_map_set() failed");
         return 1;
     }
+    t1 = monotonic_ms();
+    T_I("main: after mesa_port_map_set (%llums)", (unsigned long long)(t1 - t0));
     T_D("Port map initialized");
+    if (stop_stage_hit(stop_stage, 7, "after mesa_port_map_set")) {
+        return 0;
+    }
 
     // Read chip id (register access check)
+    t0 = monotonic_ms();
+    T_I("main: before mesa_chip_id_get");
     if (mesa_chip_id_get(NULL, &chip_id) != MESA_RC_OK) {
         T_E("mesa_chip_id_get() failed");
         return 1;
     }
+    t1 = monotonic_ms();
+    T_I("main: after mesa_chip_id_get (%llums)", (unsigned long long)(t1 - t0));
     T_D("Chip ID: 0x%04x, revision: %u", chip_id.part_number, chip_id.revision);
+    if (stop_stage_hit(stop_stage, 8, "after mesa_chip_id_get")) {
+        return 0;
+    }
 
     // Initialize modules
     init->cmd = MSCC_INIT_CMD_INIT;
