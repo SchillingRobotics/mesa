@@ -3275,13 +3275,11 @@ static vtss_rc vtss_cmn_pol_move(vtss_state_t *vtss_state, u16 idx_old, u16 idx_
 static vtss_rc vtss_cmn_pol_clear(vtss_state_t *vtss_state, u16 idx)
 {
     vtss_dlb_policer_conf_t *conf;
-    vtss_rc                  rc;
 
     /* Clear and update policer configuration */
     conf = &vtss_state->l2.pol_conf[idx];
     VTSS_MEMSET(conf, 0, sizeof(*conf));
-    rc = vtss_cil_l2_policer_update(vtss_state, idx);
-    return rc;
+    return vtss_cil_l2_policer_update(vtss_state, idx);
 }
 
 static vtss_rc vtss_cmn_istat_move(vtss_state_t *vtss_state, u16 idx_old, u16 idx_new, u16 count)
@@ -3327,13 +3325,11 @@ static vtss_rc vtss_cmn_istat_move(vtss_state_t *vtss_state, u16 idx_old, u16 id
 static vtss_rc vtss_cmn_istat_clear(vtss_state_t *vtss_state, u16 idx)
 {
     vtss_stat_idx_t stat_idx;
-    vtss_rc         rc;
 
     /* Clear SDX counters */
     stat_idx.idx = idx;
     stat_idx.edx = 0;
-    rc = vtss_cil_l2_counters_update(vtss_state, &stat_idx, TRUE);
-    return rc;
+    return vtss_cil_l2_counters_update(vtss_state, &stat_idx, TRUE);
 }
 
 static vtss_rc vtss_cmn_estat_move(vtss_state_t *vtss_state, u16 idx_old, u16 idx_new, u16 count)
@@ -3365,13 +3361,11 @@ static vtss_rc vtss_cmn_estat_move(vtss_state_t *vtss_state, u16 idx_old, u16 id
 static vtss_rc vtss_cmn_estat_clear(vtss_state_t *vtss_state, u16 idx)
 {
     vtss_stat_idx_t stat_idx;
-    vtss_rc         rc;
 
     /* Clear SDX counters */
     stat_idx.idx = 0;
     stat_idx.edx = idx;
-    rc = vtss_cil_l2_counters_update(vtss_state, &stat_idx, TRUE);
-    return rc;
+    return vtss_cil_l2_counters_update(vtss_state, &stat_idx, TRUE);
 }
 
 static vtss_rc vtss_xrow_free(vtss_state_t *vtss_state, vtss_xrow_header_t *hdr, u16 *idx)
@@ -3422,6 +3416,9 @@ static vtss_rc vtss_xrow_free(vtss_state_t *vtss_state, vtss_xrow_header_t *hdr,
 
 static vtss_rc vtss_xrow_alloc(vtss_state_t *vtss_state, vtss_xrow_header_t *hdr, u8 count, u16 *idx)
 {
+#if VTSS_OPT_TRACE
+    const char *txt;
+#endif
     vtss_xrow_entry_t *row, *row_free;
     vtss_xcol_entry_t *col;
     u16                row_idx, row_max = (u16)(hdr->max_count / 8U), row_new = row_max;
@@ -3458,6 +3455,9 @@ static vtss_rc vtss_xrow_alloc(vtss_state_t *vtss_state, vtss_xrow_header_t *hdr
                 hdr->count -= count;
                 hdr->count_size[count] -= count;
                 row->count -= count;
+#if VTSS_OPT_TRACE
+                txt = "reallocate";
+#endif
 #if !VTSS_OPT_LIGHT
                 clear = FALSE;
 #endif
@@ -3473,13 +3473,6 @@ static vtss_rc vtss_xrow_alloc(vtss_state_t *vtss_state, vtss_xrow_header_t *hdr
     for (row_idx = 0U; row_idx < row_max; row_idx++) {
         row = (hdr->row + row_idx);
         if ((size = row->size) != 0U) {
-            if (size > 8U || (size & (size - 1U)) != 0U) {
-                VTSS_MEMSET(row, 0, sizeof(*row));
-                if (row_new == row_max) {
-                    row_new = row_idx;
-                }
-                continue;
-            }
             pi = &info[size];
             if (pi->row_count == 0U || row->count < pi->row_count) {
                 /* Row with fewer used entries found */
@@ -3490,6 +3483,9 @@ static vtss_rc vtss_xrow_alloc(vtss_state_t *vtss_state, vtss_xrow_header_t *hdr
                 if (row->col[col_idx].used) {
                     /* Skip used column */
                 } else if (size == count) {
+#if VTSS_OPT_TRACE
+                    txt = "new column";
+#endif
                     goto alloc_ok;
                 } else {
                     pi->free_count += size;
@@ -3507,6 +3503,9 @@ static vtss_rc vtss_xrow_alloc(vtss_state_t *vtss_state, vtss_xrow_header_t *hdr
     if (row_new < row_max) {
         row_idx = row_new;
         col_idx = 0U;
+#if VTSS_OPT_TRACE
+        txt = "new row";
+#endif
         goto alloc_ok;
     }
 
@@ -3562,6 +3561,9 @@ static vtss_rc vtss_xrow_alloc(vtss_state_t *vtss_state, vtss_xrow_header_t *hdr
                 }
             }
         }
+#if VTSS_OPT_TRACE
+        txt = "freed row";
+#endif
         row_free->count = 0U;
         row_idx = pi->row_idx;
         col_idx = 0;
@@ -3583,6 +3585,8 @@ alloc_ok:
     p2 = (char *)vtss_state;
     col->ref = (p1 > p2 && p1 < (p2 + sizeof(*vtss_state)) ? idx : NULL);
     *idx = (row_idx * 8U + col_idx);
+    VTSS_I("%s, %s, row: %u, col: %u, idx: %u, count: %u", hdr->name, txt, row_idx, col_idx, *idx,
+           count);
 #if !VTSS_OPT_LIGHT
     for (u16 i = 0; clear && i < count; i++) {
         if (hdr->clear != NULL) {
@@ -3665,65 +3669,28 @@ static vtss_rc vtss_l2_pol_stat_create(vtss_state_t *vtss_state)
 {
     vtss_l2_state_t    *state = &vtss_state->l2;
     vtss_xrow_header_t *hdr;
-    vtss_rc             rc;
     u16                 dummy;
     u8                  cnt;
-    BOOL                skip_dummy_reserve = FALSE;
-
-    switch (vtss_state->create.target) {
-    case VTSS_TARGET_LAN9694RED:
-    case VTSS_TARGET_LAN9694TSN:
-    case VTSS_TARGET_LAN9691VAO:
-    case VTSS_TARGET_LAN9694:
-    case VTSS_TARGET_LAN9696RED:
-    case VTSS_TARGET_LAN9696TSN:
-    case VTSS_TARGET_LAN9692VAO:
-    case VTSS_TARGET_LAN9696:
-    case VTSS_TARGET_LAN9698RED:
-    case VTSS_TARGET_LAN9698TSN:
-    case VTSS_TARGET_LAN9693VAO:
-    case VTSS_TARGET_LAN9698:
-        skip_dummy_reserve = TRUE;
-        break;
-    default:
-        break;
-    }
-
 #if defined(VTSS_ARCH_LAN966X)
     cnt = 0U;
 #else
-    /* Dummy blocks of 8 instances are reserved for normal/default traffic.
-     * LAN969x uses 0 to avoid early bring-up dependency on this reservation. */
-    cnt = skip_dummy_reserve ? 0U : 8U;
+    /* Dummy blocks of 8 instances are reserved for normal/default traffic */
+    cnt = 8U;
 #endif
 
     hdr = &state->pol_table.hdr;
-    VTSS_MEMSET(state->pol_table.row, 0, sizeof(state->pol_table.row));
-    hdr->max_count = VTSS_EVC_POL_CNT;
-    hdr->count = 0U;
-    VTSS_MEMSET(hdr->count_size, 0, sizeof(hdr->count_size));
-    hdr->move = NULL;
-    hdr->clear = NULL;
     hdr->name = "policer";
     hdr->row = state->pol_table.row;
     dummy = VTSS_POL_STAT_NONE;
-    rc = vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy);
-    VTSS_RC(rc);
+    VTSS_RC(vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy));
     hdr->move = vtss_cmn_pol_move;
     hdr->clear = vtss_cmn_pol_clear;
 
     hdr = &state->istat_table.hdr;
-    VTSS_MEMSET(state->istat_table.row, 0, sizeof(state->istat_table.row));
-    hdr->max_count = VTSS_EVC_STAT_CNT;
-    hdr->count = 0U;
-    VTSS_MEMSET(hdr->count_size, 0, sizeof(hdr->count_size));
-    hdr->move = NULL;
-    hdr->clear = NULL;
     hdr->name = "istat";
     hdr->row = state->istat_table.row;
     dummy = VTSS_POL_STAT_NONE;
-    rc = vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy);
-    VTSS_RC(rc);
+    VTSS_RC(vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy));
     hdr->move = vtss_cmn_istat_move;
     hdr->clear = vtss_cmn_istat_clear;
 
@@ -3731,35 +3698,20 @@ static vtss_rc vtss_l2_pol_stat_create(vtss_state_t *vtss_state)
     cnt = 1U;
 #endif
     hdr = &state->estat_table.hdr;
-    VTSS_MEMSET(state->estat_table.row, 0, sizeof(state->estat_table.row));
-    hdr->max_count = VTSS_EVC_STAT_CNT;
-    hdr->count = 0U;
-    VTSS_MEMSET(hdr->count_size, 0, sizeof(hdr->count_size));
-    hdr->move = NULL;
-    hdr->clear = NULL;
     hdr->name = "estat";
     hdr->row = state->estat_table.row;
     dummy = VTSS_POL_STAT_NONE;
-    rc = vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy);
-    VTSS_RC(rc);
+    VTSS_RC(vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy));
     hdr->move = vtss_cmn_estat_move;
     hdr->clear = vtss_cmn_estat_clear;
 
 #if defined(VTSS_FEATURE_FRER)
-    /* Use same skip logic as other allocations for LAN969x */
-    cnt = skip_dummy_reserve ? 0U : 8U;
+    cnt = 8U;
     hdr = &state->ms_table.hdr;
-    VTSS_MEMSET(state->ms_table.row, 0, sizeof(state->ms_table.row));
-    hdr->max_count = VTSS_MSTREAM_CNT;
-    hdr->count = 0U;
-    VTSS_MEMSET(hdr->count_size, 0, sizeof(hdr->count_size));
-    hdr->move = NULL;
-    hdr->clear = NULL;
     hdr->name = "mstream";
     hdr->row = state->ms_table.row;
     dummy = VTSS_POL_STAT_NONE;
-    rc = vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy);
-    VTSS_RC(rc);
+    VTSS_RC(vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy));
     hdr->move = vtss_mstream_move;
     hdr->clear = vtss_mstream_clear;
 #endif

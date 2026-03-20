@@ -10,7 +10,6 @@
 #include <linux/i2c-dev.h> /* I2C support */
 #include <unistd.h>
 #include <stdlib.h>
-#include <sys/time.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -409,11 +408,7 @@ static mesa_rc board_dtree_get(const char *tag, char *buf, size_t bufsize, size_
 {
     int    fd;
     char   fname[128];
-    ssize_t n;
-
-    if (bufsize == 0) {
-        return MESA_RC_ERROR;
-    }
+    size_t n;
 
     sprintf(fname, "/proc/device-tree/meba/%s", tag);
     if ((fd = open(fname, O_RDONLY)) < 0) {
@@ -421,13 +416,13 @@ static mesa_rc board_dtree_get(const char *tag, char *buf, size_t bufsize, size_
         return MESA_RC_ERROR;
     }
 
-    if ((n = read(fd, buf, bufsize - 1)) < 0) {
+    if ((n = read(fd, buf, bufsize)) < 0) {
         n = 0;
     }
-    buf[(size_t)n] = 0;
+    buf[n] = 0;
     close(fd);
     if (buflen) {
-        *buflen = (size_t)n;
+        *buflen = n;
     }
     T_D("dt tag %s: %s", tag, buf);
     return MESA_RC_OK;
