@@ -101,7 +101,7 @@ static mesa_bool_t pcb8398_sfp_gpio_get(meba_inst_t inst, mesa_port_no_t port_no
                                         mesa_bool_t *value)
 {
     meba_board_state_t *board = INST2BOARD(inst);
-    uint32_t            v = 0;
+    mesa_bool_t         v = 0;
     uint8_t             gpio_no;
 
     if (value == NULL || board->type != BOARD_TYPE_LAGUNA_PCB8398 || port_no >= 30 ||
@@ -453,7 +453,8 @@ static uint32_t lan969x_capability(meba_inst_t inst, int cap)
         if (board->type == BOARD_TYPE_LAGUNA_PCB8398 || board->type == BOARD_TYPE_LAGUNA_PCB8422) {
             meba_synce_clock_hw_id_t dpll_type;
 
-            if ((meba_synce_spi_if_get_dpll_type(inst, &dpll_type) == MESA_RC_OK)) {
+            if ((meba_synce_spi_if_get_dpll_type(inst, &dpll_type) == MESA_RC_OK) &&
+                (dpll_type != MEBA_SYNCE_CLOCK_HW_NONE)) {
                 return 1;
             } else {
                 return 0;
@@ -1287,11 +1288,12 @@ meba_inst_t lan969x_initialize(meba_inst_t inst, const meba_board_interface_t *c
         fprintf(stderr, "Port table malloc failure\n");
         goto error_out;
     }
-    if (board->type == BOARD_TYPE_LAGUNA_PCB8398 || board->type == BOARD_TYPE_LAGUNA_PCB8422) {
-        // This board has onboard DPLL for Synce/PTP
-        // Use its 25Mhz ref clock for 1588 (and Core):
-        inst->props.ref_freq = MESA_CORE_REF_CLK_25MHZ;
-    }
+    // Note: Do NOT force ref_freq here. Let it default to MESA_CORE_REF_CLK_DEFAULT
+    // so MESA reads the hardware strapping (REFCLK_SEL). The original code assumed
+    // all PCB8398/PCB8422 boards have a SyncE DPLL providing 25MHz, but custom boards
+    // may use the 39MHz crystal directly. Forcing 25MHz with clk_sel=2 on boards
+    // without the DPLL causes PLL lock failure and system hang.
+    // SyncE capability is already dynamically detected via meba_synce_spi_if_get_dpll_type().
 
     switch (board->type) {
     case BOARD_TYPE_LAGUNA_PCB8398:
