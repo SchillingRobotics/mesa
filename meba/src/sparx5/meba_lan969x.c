@@ -284,7 +284,6 @@ static void lan966x_init_port_table(meba_inst_t inst, int port_cnt, port_map_t *
     }
 
     board->port_cnt = port_cnt;
-    T_I(inst, "LAN969X map init: board_type=0x%x port_cnt=%d", board->type, port_cnt);
     for (port_no = 0; port_no < port_cnt; port_no++) {
         port_entry_map(&board->port[port_no].map, &map[port_no]);
 
@@ -297,7 +296,6 @@ static void lan966x_init_port_table(meba_inst_t inst, int port_cnt, port_map_t *
             board->port[port_no].map.phy_base_port = (map[port_no].chip_port / 4) * 4;
         }
     }
-    T_I(inst, "LAN969X map init done: port_cnt=%d", board->port_cnt);
 }
 
 static mesa_rc lan969x_board_init(meba_inst_t inst)
@@ -305,8 +303,6 @@ static mesa_rc lan969x_board_init(meba_inst_t inst)
     meba_board_state_t *board = INST2BOARD(inst);
     mesa_sgpio_conf_t   conf;
     uint32_t            gpio_no, i, p;
-
-    T_I(inst, "LAN969X board init start: board_type=0x%x", board->type);
 
     switch (board->type) {
     case BOARD_TYPE_SUNRISE: return MESA_RC_OK;
@@ -348,8 +344,6 @@ static mesa_rc lan969x_board_init(meba_inst_t inst)
     if (board->type == BOARD_TYPE_LAGUNA_PCB8422) {
         if (mesa_sgpio_conf_get(NULL, 0, 0, &conf) != MESA_RC_OK) {
             T_E(inst, "Could not get sgpio conf");
-        } else {
-            T_I(inst, "LAN969X board init: sgpio_conf_get ok");
         }
         // Static PCB8422 SGPIO board config
         uint8_t sgpio[10] = {0, 4, 8, 12, 16, 20, 24, 25, 26, 27};
@@ -377,8 +371,6 @@ static mesa_rc lan969x_board_init(meba_inst_t inst)
 
         if (mesa_sgpio_conf_set(NULL, 0, 0, &conf) != MESA_RC_OK) {
             T_E(inst, "Could not set sgpio conf");
-        } else {
-            T_I(inst, "LAN969X board init: sgpio_conf_set ok");
         }
     } /* end SGPIO setup for PCB8422 only */
 
@@ -414,8 +406,6 @@ static mesa_rc lan969x_board_init(meba_inst_t inst)
             (void)mesa_gpio_write(NULL, 0, pcb8398_sfp_gpio_map[p].gpio_txdis, 0);
         }
     }
-
-    T_I(inst, "LAN969X board init done");
 
     return MESA_RC_OK;
 }
@@ -742,7 +732,6 @@ static mesa_rc lan969x_reset(meba_inst_t inst, meba_reset_point_t reset)
     meba_board_state_t *board = INST2BOARD(inst);
     mesa_rc             rc = MESA_RC_OK;
 
-    T_I(inst, "LAN969X reset enter: point=%d", reset);
     switch (reset) {
     case MEBA_BOARD_INITIALIZE:      lan969x_board_init(inst); break;
     case MEBA_PORT_RESET:            break;
@@ -807,7 +796,6 @@ static mesa_rc lan969x_reset(meba_inst_t inst, meba_reset_point_t reset)
         break;
     default: rc = MESA_RC_ERROR;
     }
-    T_I(inst, "LAN969X reset done: point=%d rc=%d", reset, rc);
     return rc;
 }
 
@@ -1278,8 +1266,6 @@ meba_inst_t lan969x_initialize(meba_inst_t inst, const meba_board_interface_t *c
         port_cnt = pcb_var;
     }
 
-    T_I(inst, "LAN969X init entered: pcb=0x%x target=0x%x pcb_var=%d", pcb, target, pcb_var);
-
     board->type = (board_type_t)pcb;
     inst->props.board_type = board->type;
     inst->props.target = target;
@@ -1300,7 +1286,6 @@ meba_inst_t lan969x_initialize(meba_inst_t inst, const meba_board_interface_t *c
         if (port_cnt == 0) {
             port_cnt = sizeof(port_table_pcb8398) / sizeof(port_map_t);
         }
-        T_I(inst, "Using port_table_pcb8398 (%d entries)", port_cnt);
         lan966x_init_port_table(inst, port_cnt, port_table_pcb8398);
         meba_port_map = port_table_pcb8398;
         break;
@@ -1308,12 +1293,10 @@ meba_inst_t lan969x_initialize(meba_inst_t inst, const meba_board_interface_t *c
         if (port_cnt == 0) {
             port_cnt = sizeof(port_table_pcb8422) / sizeof(port_map_t);
         }
-        T_I(inst, "Using port_table_pcb8422 (%d entries)", port_cnt);
         lan966x_init_port_table(inst, port_cnt, port_table_pcb8422);
         meba_port_map = port_table_pcb8422;
         break;
     case BOARD_TYPE_SUNRISE:
-        T_I(inst, "Using port_table_sunrise (5 entries)");
         lan966x_init_port_table(inst, 5, port_table_sunrise);
         meba_port_map = port_table_sunrise;
         break;
@@ -1324,7 +1307,6 @@ meba_inst_t lan969x_initialize(meba_inst_t inst, const meba_board_interface_t *c
         inst->props.target, inst->props.mux_mode, board->port_cnt);
 
     // Hook up board API functions
-    T_D(inst, "Hooking up board API");
     inst->api.meba_capability = lan969x_capability;
     inst->api.meba_port_entry_get = lan969x_port_entry_get;
     inst->api.meba_reset = lan969x_reset;
