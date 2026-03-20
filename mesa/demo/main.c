@@ -48,15 +48,6 @@ static mscc_appl_trace_group_t trace_groups[TRACE_GROUP_CNT] = {
 static mscc_appl_init_t appl_init;
 static void             init_modules(mscc_appl_init_t *init);
 
-static uint64_t monotonic_ms(void)
-{
-    struct timeval tv = {0, 0};
-    if (gettimeofday(&tv, NULL) != 0) {
-        return 0;
-    }
-    return ((uint64_t)tv.tv_sec * 1000ULL) + ((uint64_t)tv.tv_usec / 1000ULL);
-}
-
 void *vtss_os_malloc(size_t size, vtss_mem_flags_t flags)
 {
     if (flags == VTSS_MEM_FLAGS_DMA) {
@@ -1046,7 +1037,6 @@ int main(int argc, char **argv)
     reg_read_t         reg_read;
     reg_write_t        reg_write;
     uint32_t           sleep_us = 10000, poll_cnt = 0;
-    uint64_t           t0, t1;
 
     if (mesa_capability(NULL, MESA_CAP_PORT_KR_IRQ)) {
         sleep_us = 200;
@@ -1119,31 +1109,18 @@ int main(int argc, char **argv)
     T_D("MEBA Instantiated");
 
     // Create API instance
-    t0 = monotonic_ms();
-    T_I("main: before mesa_inst_get");
     mesa_inst_get(meba_inst->props.target, &create);
-    t1 = monotonic_ms();
-    T_I("main: after mesa_inst_get (%llums)", (unsigned long long)(t1 - t0));
-
-    t0 = monotonic_ms();
-    T_I("main: before mesa_inst_create");
     if (mesa_inst_create(&create, NULL) != MESA_RC_OK) {
         T_E("API Failed to Instantiate");
         return 1;
     }
-    t1 = monotonic_ms();
-    T_I("main: after mesa_inst_create (%llums)", (unsigned long long)(t1 - t0));
     T_D("API Instantiated");
 
     // Initialize API instance
-    t0 = monotonic_ms();
-    T_I("main: before mesa_init_conf_get");
     if (mesa_init_conf_get(NULL, &conf) != MESA_RC_OK) {
         T_E("mesa_init_conf_get() failed");
         return 1;
     }
-    t1 = monotonic_ms();
-    T_I("main: after mesa_init_conf_get (%llums)", (unsigned long long)(t1 - t0));
     conf.reg_read = board_info.reg_read;
     conf.reg_write = board_info.reg_write;
     conf.mux_mode = meba_inst->props.mux_mode;
@@ -1159,23 +1136,14 @@ int main(int argc, char **argv)
         conf.core_clock.ref_freq = meba_inst->props.ref_freq;
     }
 
-    t0 = monotonic_ms();
-    T_I("main: before mesa_init_conf_set");
     if (mesa_init_conf_set(NULL, &conf) != MESA_RC_OK) {
         T_E("mesa_init_conf_set() failed");
         return 1;
     }
-    t1 = monotonic_ms();
-    T_I("main: after mesa_init_conf_set (%llums)", (unsigned long long)(t1 - t0));
     T_D("API initialized");
 
     // Do a board init before the port map is established in case of any changes
-    t0 = monotonic_ms();
-    T_I("main: before meba_reset(MEBA_BOARD_INITIALIZE)");
     MEBA_WRAP(meba_reset, init->board_inst, MEBA_BOARD_INITIALIZE);
-    t1 = monotonic_ms();
-    T_I("main: after meba_reset(MEBA_BOARD_INITIALIZE) (%llums)",
-        (unsigned long long)(t1 - t0));
 
     // Setup port mapping
     if ((port_map = calloc(port_cnt, sizeof(*port_map))) == NULL) {
@@ -1189,27 +1157,19 @@ int main(int argc, char **argv)
         }
         port_map[port_no] = port_entry.map;
     }
-    t0 = monotonic_ms();
-    T_I("main: before mesa_port_map_set");
     rc = mesa_port_map_set(NULL, port_cnt, port_map);
     free(port_map);
     if (rc != MESA_RC_OK) {
         T_E("mesa_port_map_set() failed");
         return 1;
     }
-    t1 = monotonic_ms();
-    T_I("main: after mesa_port_map_set (%llums)", (unsigned long long)(t1 - t0));
     T_D("Port map initialized");
 
     // Read chip id (register access check)
-    t0 = monotonic_ms();
-    T_I("main: before mesa_chip_id_get");
     if (mesa_chip_id_get(NULL, &chip_id) != MESA_RC_OK) {
         T_E("mesa_chip_id_get() failed");
         return 1;
     }
-    t1 = monotonic_ms();
-    T_I("main: after mesa_chip_id_get (%llums)", (unsigned long long)(t1 - t0));
     T_D("Chip ID: 0x%04x, revision: %u", chip_id.part_number, chip_id.revision);
 
     // Initialize modules

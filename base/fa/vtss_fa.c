@@ -11,8 +11,6 @@
 #include "../omega/vtss_omega_clock_cil.h"
 #endif
 
-static BOOL env_enabled(const char *name);
-
 // Various defines needed to calculate the DSM calendar for LAN969x.
 #define DEV_10G_IDX   0U
 #define DEV_5G_IDX    1U
@@ -521,11 +519,6 @@ static vtss_rc fa_core_ref_clk_config(vtss_state_t *vtss_state)
     vtss_core_ref_clk_t    r_freq = vtss_state->init_conf.core_clock.ref_freq;
     vtss_core_clock_freq_t c_freq = vtss_state->init_conf.core_clock.freq;
     u32 val, poll_cnt = 0U, clk_sel = 0U, divr = 0U, divq = 0U, divfi = 0U, divff = 0U;
-    BOOL trace_core_clock = env_enabled("MESA_TRACE_CORE_CLOCK");
-
-    if (trace_core_clock) {
-        VTSS_I("core_ref_clk: enter ref_freq=%u core_freq=%u", r_freq, c_freq);
-    }
 
     if (r_freq == VTSS_CORE_REF_CLK_25MHZ && c_freq == VTSS_CORE_CLOCK_328MHZ) {
         divfi = 64U;
@@ -554,14 +547,6 @@ static vtss_rc fa_core_ref_clk_config(vtss_state_t *vtss_state)
     } else {
         VTSS_E("Clock config not supported");
         return VTSS_RC_ERROR;
-    }
-    if (trace_core_clock) {
-        VTSS_I("core_ref_clk: dividers clk_sel=%u divr=%u divq=%u divfi=%u divff=%u", clk_sel,
-               divr, divq, divfi, divff);
-    }
-
-    if (trace_core_clock) {
-        VTSS_I("core_ref_clk: programming spare pll");
     }
     REG_WRM(VTSS_CHIP_TOP_SPARE_PLL_FREQ_CFG, VTSS_F_CHIP_TOP_SPARE_PLL_FREQ_CFG_BYPASS_ENA(1),
             VTSS_M_CHIP_TOP_SPARE_PLL_FREQ_CFG_BYPASS_ENA);
@@ -597,13 +582,7 @@ static vtss_rc fa_core_ref_clk_config(vtss_state_t *vtss_state)
             break;
         }
     }
-    if (trace_core_clock) {
-        VTSS_I("core_ref_clk: spare pll lock poll_cnt=%u last_val=0x%08x", poll_cnt, val);
-    }
     // Shift to use spare PLL for core clock
-    if (trace_core_clock) {
-        VTSS_I("core_ref_clk: switch core clock to spare pll");
-    }
     REG_WRM(VTSS_CHIP_TOP_SPARE_PLL_CFG, VTSS_F_CHIP_TOP_SPARE_PLL_CFG_ASSIGN_TO_CORE(1),
             VTSS_M_CHIP_TOP_SPARE_PLL_CFG_ASSIGN_TO_CORE);
 
@@ -612,9 +591,6 @@ static vtss_rc fa_core_ref_clk_config(vtss_state_t *vtss_state)
     //
     REG_WRM(VTSS_CHIP_TOP_CORE_PLL_FREQ_CFG, VTSS_F_CHIP_TOP_CORE_PLL_FREQ_CFG_BYPASS_ENA(1),
             VTSS_M_CHIP_TOP_CORE_PLL_FREQ_CFG_BYPASS_ENA);
-    if (trace_core_clock) {
-        VTSS_I("core_ref_clk: programming core pll");
-    }
 
     REG_WRM(VTSS_CHIP_TOP_CORE_PLL_FREQ_CFG,
             VTSS_F_CHIP_TOP_CORE_PLL_FREQ_CFG_DIVFI(divfi) |
@@ -646,13 +622,6 @@ static vtss_rc fa_core_ref_clk_config(vtss_state_t *vtss_state)
             VTSS_E("Core PLL could not get into lock");
             break;
         }
-    }
-    if (trace_core_clock) {
-        VTSS_I("core_ref_clk: core pll lock poll_cnt=%u last_val=0x%08x", poll_cnt, val);
-    }
-
-    if (trace_core_clock) {
-        VTSS_I("core_ref_clk: switch core clock back from spare pll");
     }
     REG_WRM(VTSS_CHIP_TOP_SPARE_PLL_CFG, VTSS_F_CHIP_TOP_SPARE_PLL_CFG_ASSIGN_TO_CORE(0),
             VTSS_M_CHIP_TOP_SPARE_PLL_CFG_ASSIGN_TO_CORE);
@@ -689,14 +658,7 @@ static vtss_rc fa_core_ref_clk_config(vtss_state_t *vtss_state)
             break;
         }
     }
-    if (trace_core_clock) {
-        VTSS_I("core_ref_clk: ddr pll lock poll_cnt=%u last_val=0x%08x", poll_cnt, val);
-    }
 #endif
-
-    if (trace_core_clock) {
-        VTSS_I("core_ref_clk: exit");
-    }
 
     return VTSS_RC_OK;
 }
@@ -706,14 +668,8 @@ static vtss_rc fa_core_clock_config(vtss_state_t *vtss_state)
 {
     vtss_rc                rc = VTSS_RC_OK;
     vtss_core_clock_freq_t freq, f = vtss_state->init_conf.core_clock.freq;
-    BOOL                   trace_core_clock = env_enabled("MESA_TRACE_CORE_CLOCK");
     freq = f;
     u32 clk_period, pol_upd_int, val;
-
-    if (trace_core_clock) {
-        VTSS_I("core_clock: enter target=0x%x requested_freq=%u ref_freq=%u", vtss_state->create.target,
-               f, vtss_state->init_conf.core_clock.ref_freq);
-    }
 
     /* Verify if core clock frequency is supported on target */
     /* If 'VTSS_CORE_CLOCK_DEFAULT' then the highest supported freq. is used */
@@ -804,9 +760,6 @@ static vtss_rc fa_core_clock_config(vtss_state_t *vtss_state)
 
     /* Update state with chosen frequency */
     vtss_state->init_conf.core_clock.freq = freq;
-    if (trace_core_clock) {
-        VTSS_I("core_clock: selected_freq=%u", freq);
-    }
 
 #if defined(VTSS_ARCH_LAIKA)
     // Laika only
@@ -881,20 +834,10 @@ static vtss_rc fa_core_clock_config(vtss_state_t *vtss_state)
             } else {
                 vtss_state->init_conf.core_clock.ref_freq = VTSS_CORE_REF_CLK_25MHZ;
             }
-            if (trace_core_clock) {
-                VTSS_I("core_clock: strap-selected ref_freq=%u", vtss_state->init_conf.core_clock.ref_freq);
-            }
-        }
-        if (trace_core_clock) {
-            VTSS_I("core_clock: before fa_core_ref_clk_config");
         }
         rc = fa_core_ref_clk_config(vtss_state);
         if (rc != VTSS_RC_OK) {
-            VTSS_E("core_clock: fa_core_ref_clk_config failed rc=%d", rc);
             return rc;
-        }
-        if (trace_core_clock) {
-            VTSS_I("core_clock: after fa_core_ref_clk_config");
         }
 
         pol_upd_int = 820U; // Laguna default
@@ -912,32 +855,20 @@ static vtss_rc fa_core_clock_config(vtss_state_t *vtss_state)
 
     clk_period = vtss_fa_clk_period(freq);
     val = (clk_period / 100U);
-    if (trace_core_clock) {
-        VTSS_I("core_clock: clk_period=%u val=%u", clk_period, val);
-    }
 
 #if defined(VTSS_ARCH_SPARX5)
     REG_WRM(VTSS_HSCH_SYS_CLK_PER, VTSS_F_HSCH_SYS_CLK_PER_SYS_CLK_PER_100PS(val),
             VTSS_M_HSCH_SYS_CLK_PER_SYS_CLK_PER_100PS);
 #endif
 
-    if (trace_core_clock) {
-        VTSS_I("core_clock: before ANA_AC_POL_COMMON_BDLB_DLB_CTRL write");
-    }
     REG_WRM(VTSS_ANA_AC_POL_COMMON_BDLB_DLB_CTRL,
             VTSS_F_ANA_AC_POL_COMMON_BDLB_DLB_CTRL_CLK_PERIOD_01NS(val),
             VTSS_M_ANA_AC_POL_COMMON_BDLB_DLB_CTRL_CLK_PERIOD_01NS);
 
-    if (trace_core_clock) {
-        VTSS_I("core_clock: before ANA_AC_POL_COMMON_BUM_SLB_DLB_CTRL write");
-    }
     REG_WRM(VTSS_ANA_AC_POL_COMMON_BUM_SLB_DLB_CTRL,
             VTSS_F_ANA_AC_POL_COMMON_BUM_SLB_DLB_CTRL_CLK_PERIOD_01NS(val),
             VTSS_M_ANA_AC_POL_COMMON_BUM_SLB_DLB_CTRL_CLK_PERIOD_01NS);
 
-    if (trace_core_clock) {
-        VTSS_I("core_clock: before LRN_AUTOAGE_CFG_1 write");
-    }
     REG_WRM(VTSS_LRN_AUTOAGE_CFG_1, VTSS_F_LRN_AUTOAGE_CFG_1_CLK_PERIOD_01NS(val),
             VTSS_M_LRN_AUTOAGE_CFG_1_CLK_PERIOD_01NS);
 
@@ -947,43 +878,20 @@ static vtss_rc fa_core_clock_config(vtss_state_t *vtss_state)
                 VTSS_M_DEVCPU_GCB_SIO_CLOCK_SYS_CLK_PERIOD);
     }
 #elif defined(VTSS_ARCH_LAN969X)
-    if (trace_core_clock) {
-        VTSS_I("core_clock: before DEVCPU_GCB_SIO_CLOCK write");
-    }
     REG_WRM(VTSS_DEVCPU_GCB_SIO_CLOCK, VTSS_F_DEVCPU_GCB_SIO_CLOCK_SYS_CLK_PERIOD(val),
             VTSS_M_DEVCPU_GCB_SIO_CLOCK_SYS_CLK_PERIOD);
 #endif
 
-    if (trace_core_clock) {
-        VTSS_I("core_clock: before HSCH_TAS_STATEMACHINE_CFG write");
-    }
     REG_WRM(VTSS_HSCH_TAS_STATEMACHINE_CFG,
             VTSS_F_HSCH_TAS_STATEMACHINE_CFG_REVISIT_DLY((256U * 1000U) / clk_period),
             VTSS_M_HSCH_TAS_STATEMACHINE_CFG_REVISIT_DLY);
 
-    if (trace_core_clock) {
-        VTSS_I("core_clock: before POL_UPD_INT_CFG write");
-    }
     REG_WRM(VTSS_ANA_AC_POL_POL_ALL_CFG_POL_UPD_INT_CFG,
             VTSS_F_ANA_AC_POL_POL_ALL_CFG_POL_UPD_INT_CFG_POL_UPD_INT(pol_upd_int),
             VTSS_M_ANA_AC_POL_POL_ALL_CFG_POL_UPD_INT_CFG_POL_UPD_INT);
-    if (trace_core_clock) {
-        VTSS_I("core_clock: exit");
-    }
     VTSS_I("Setting Core Clock - done");
 
     return VTSS_RC_OK;
-}
-
-static BOOL env_enabled(const char *name)
-{
-    const char *v = getenv(name);
-
-    if (v == NULL || *v == '\0') {
-        return FALSE;
-    }
-
-    return (v[0] == '1' || v[0] == 'y' || v[0] == 'Y' || v[0] == 't' || v[0] == 'T');
 }
 
 static vtss_rc fa_init_switchcore(vtss_state_t *vtss_state)
