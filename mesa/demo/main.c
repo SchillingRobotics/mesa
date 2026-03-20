@@ -57,36 +57,6 @@ static uint64_t monotonic_ms(void)
     return ((uint64_t)tv.tv_sec * 1000ULL) + ((uint64_t)tv.tv_usec / 1000ULL);
 }
 
-static int stop_stage_get(void)
-{
-    const char *s = getenv("MESA_STOP_AFTER_STAGE");
-    long        v;
-    char       *end = NULL;
-
-    if (s == NULL || *s == '\0') {
-        return -1;
-    }
-
-    errno = 0;
-    v = strtol(s, &end, 10);
-    if (errno != 0 || end == s || *end != '\0' || v < 0 || v > 1000) {
-        T_E("Invalid MESA_STOP_AFTER_STAGE='%s'", s);
-        return -1;
-    }
-
-    return (int)v;
-}
-
-static int stop_stage_hit(int stop_stage, int stage, const char *name)
-{
-    if (stop_stage == stage) {
-        T_I("Stop stage hit: %d (%s). Exiting cleanly.", stage, name);
-        return 1;
-    }
-
-    return 0;
-}
-
 void *vtss_os_malloc(size_t size, vtss_mem_flags_t flags)
 {
     if (flags == VTSS_MEM_FLAGS_DMA) {
@@ -116,7 +86,7 @@ uintptr_t vtss_os_cpu_to_dma_addr(void *ptr) { return udmabuf_cpu_to_dma_addr(pt
  */
 static int i2c_adapter_open(int adapter_nr, int i2c_addr)
 {
-    char filename[20]; /* 20 char should be enough for holding the file name */
+    char filename[24]; /* /dev/i2c-NNN plus null terminator */
     int  file;
 
     /* Try requested numbering first. If that fails, try the alternate
@@ -1077,7 +1047,6 @@ int main(int argc, char **argv)
     reg_write_t        reg_write;
     uint32_t           sleep_us = 10000, poll_cnt = 0;
     uint64_t           t0, t1;
-    int                stop_stage;
 
     if (mesa_capability(NULL, MESA_CAP_PORT_KR_IRQ)) {
         sleep_us = 200;
@@ -1089,10 +1058,6 @@ int main(int argc, char **argv)
 
     // Parse options
     main_parse_options(argc, argv);
-    stop_stage = stop_stage_get();
-    if (stop_stage >= 0) {
-        T_I("Stop stage enabled: %d", stop_stage);
-    }
 
     if (!run_in_foreground) {
         if (daemon(0, 1) < 0) {
@@ -1152,9 +1117,6 @@ int main(int argc, char **argv)
     }
     init->board_inst = meba_inst;
     T_D("MEBA Instantiated");
-    if (stop_stage_hit(stop_stage, 1, "after meba_initialize")) {
-        return 0;
-    }
 
     // Create API instance
     t0 = monotonic_ms();
@@ -1162,9 +1124,6 @@ int main(int argc, char **argv)
     mesa_inst_get(meba_inst->props.target, &create);
     t1 = monotonic_ms();
     T_I("main: after mesa_inst_get (%llums)", (unsigned long long)(t1 - t0));
-    if (stop_stage_hit(stop_stage, 2, "after mesa_inst_get")) {
-        return 0;
-    }
 
     t0 = monotonic_ms();
     T_I("main: before mesa_inst_create");
@@ -1175,9 +1134,6 @@ int main(int argc, char **argv)
     t1 = monotonic_ms();
     T_I("main: after mesa_inst_create (%llums)", (unsigned long long)(t1 - t0));
     T_D("API Instantiated");
-    if (stop_stage_hit(stop_stage, 3, "after mesa_inst_create")) {
-        return 0;
-    }
 
     // Initialize API instance
     t0 = monotonic_ms();
@@ -1188,9 +1144,6 @@ int main(int argc, char **argv)
     }
     t1 = monotonic_ms();
     T_I("main: after mesa_init_conf_get (%llums)", (unsigned long long)(t1 - t0));
-    if (stop_stage_hit(stop_stage, 4, "after mesa_init_conf_get")) {
-        return 0;
-    }
     conf.reg_read = board_info.reg_read;
     conf.reg_write = board_info.reg_write;
     conf.mux_mode = meba_inst->props.mux_mode;
@@ -1215,9 +1168,6 @@ int main(int argc, char **argv)
     t1 = monotonic_ms();
     T_I("main: after mesa_init_conf_set (%llums)", (unsigned long long)(t1 - t0));
     T_D("API initialized");
-    if (stop_stage_hit(stop_stage, 5, "after mesa_init_conf_set")) {
-        return 0;
-    }
 
     // Do a board init before the port map is established in case of any changes
     t0 = monotonic_ms();
@@ -1226,9 +1176,6 @@ int main(int argc, char **argv)
     t1 = monotonic_ms();
     T_I("main: after meba_reset(MEBA_BOARD_INITIALIZE) (%llums)",
         (unsigned long long)(t1 - t0));
-    if (stop_stage_hit(stop_stage, 6, "after meba_reset(MEBA_BOARD_INITIALIZE)")) {
-        return 0;
-    }
 
     // Setup port mapping
     if ((port_map = calloc(port_cnt, sizeof(*port_map))) == NULL) {
@@ -1253,9 +1200,6 @@ int main(int argc, char **argv)
     t1 = monotonic_ms();
     T_I("main: after mesa_port_map_set (%llums)", (unsigned long long)(t1 - t0));
     T_D("Port map initialized");
-    if (stop_stage_hit(stop_stage, 7, "after mesa_port_map_set")) {
-        return 0;
-    }
 
     // Read chip id (register access check)
     t0 = monotonic_ms();
@@ -1267,9 +1211,6 @@ int main(int argc, char **argv)
     t1 = monotonic_ms();
     T_I("main: after mesa_chip_id_get (%llums)", (unsigned long long)(t1 - t0));
     T_D("Chip ID: 0x%04x, revision: %u", chip_id.part_number, chip_id.revision);
-    if (stop_stage_hit(stop_stage, 8, "after mesa_chip_id_get")) {
-        return 0;
-    }
 
     // Initialize modules
     init->cmd = MSCC_INIT_CMD_INIT;
