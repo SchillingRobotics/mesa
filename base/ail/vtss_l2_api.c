@@ -3280,9 +3280,7 @@ static vtss_rc vtss_cmn_pol_clear(vtss_state_t *vtss_state, u16 idx)
     /* Clear and update policer configuration */
     conf = &vtss_state->l2.pol_conf[idx];
     VTSS_MEMSET(conf, 0, sizeof(*conf));
-    VTSS_I("vtss_cmn_pol_clear: begin idx=%u", idx);
     rc = vtss_cil_l2_policer_update(vtss_state, idx);
-    VTSS_I("vtss_cmn_pol_clear: done idx=%u rc=%d", idx, rc);
     return rc;
 }
 
@@ -3334,9 +3332,7 @@ static vtss_rc vtss_cmn_istat_clear(vtss_state_t *vtss_state, u16 idx)
     /* Clear SDX counters */
     stat_idx.idx = idx;
     stat_idx.edx = 0;
-    VTSS_I("vtss_cmn_istat_clear: begin idx=%u", idx);
     rc = vtss_cil_l2_counters_update(vtss_state, &stat_idx, TRUE);
-    VTSS_I("vtss_cmn_istat_clear: done idx=%u rc=%d", idx, rc);
     return rc;
 }
 
@@ -3374,9 +3370,7 @@ static vtss_rc vtss_cmn_estat_clear(vtss_state_t *vtss_state, u16 idx)
     /* Clear SDX counters */
     stat_idx.idx = 0;
     stat_idx.edx = idx;
-    VTSS_I("vtss_cmn_estat_clear: begin idx=%u", idx);
     rc = vtss_cil_l2_counters_update(vtss_state, &stat_idx, TRUE);
-    VTSS_I("vtss_cmn_estat_clear: done idx=%u rc=%d", idx, rc);
     return rc;
 }
 
@@ -3480,7 +3474,6 @@ static vtss_rc vtss_xrow_alloc(vtss_state_t *vtss_state, vtss_xrow_header_t *hdr
         row = (hdr->row + row_idx);
         if ((size = row->size) != 0U) {
             if (size > 8U || (size & (size - 1U)) != 0U) {
-                VTSS_I("%s, invalid row size %u at row %u - resetting row", hdr->name, size, row_idx);
                 VTSS_MEMSET(row, 0, sizeof(*row));
                 if (row_new == row_max) {
                     row_new = row_idx;
@@ -3714,9 +3707,7 @@ static vtss_rc vtss_l2_pol_stat_create(vtss_state_t *vtss_state)
     hdr->name = "policer";
     hdr->row = state->pol_table.row;
     dummy = VTSS_POL_STAT_NONE;
-    VTSS_I("l2_pol_stat_create: policer alloc begin cnt=%u", cnt);
     rc = vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy);
-    VTSS_I("l2_pol_stat_create: policer alloc done rc=%d idx=%u", rc, dummy);
     VTSS_RC(rc);
     hdr->move = vtss_cmn_pol_move;
     hdr->clear = vtss_cmn_pol_clear;
@@ -3731,9 +3722,7 @@ static vtss_rc vtss_l2_pol_stat_create(vtss_state_t *vtss_state)
     hdr->name = "istat";
     hdr->row = state->istat_table.row;
     dummy = VTSS_POL_STAT_NONE;
-    VTSS_I("l2_pol_stat_create: istat alloc begin cnt=%u", cnt);
     rc = vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy);
-    VTSS_I("l2_pol_stat_create: istat alloc done rc=%d idx=%u", rc, dummy);
     VTSS_RC(rc);
     hdr->move = vtss_cmn_istat_move;
     hdr->clear = vtss_cmn_istat_clear;
@@ -3751,9 +3740,7 @@ static vtss_rc vtss_l2_pol_stat_create(vtss_state_t *vtss_state)
     hdr->name = "estat";
     hdr->row = state->estat_table.row;
     dummy = VTSS_POL_STAT_NONE;
-    VTSS_I("l2_pol_stat_create: estat alloc begin cnt=%u", cnt);
     rc = vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy);
-    VTSS_I("l2_pol_stat_create: estat alloc done rc=%d idx=%u", rc, dummy);
     VTSS_RC(rc);
     hdr->move = vtss_cmn_estat_move;
     hdr->clear = vtss_cmn_estat_clear;
@@ -3771,9 +3758,7 @@ static vtss_rc vtss_l2_pol_stat_create(vtss_state_t *vtss_state)
     hdr->name = "mstream";
     hdr->row = state->ms_table.row;
     dummy = VTSS_POL_STAT_NONE;
-    VTSS_I("l2_pol_stat_create: mstream alloc begin cnt=%u", cnt);
     rc = vtss_xrow_alloc(vtss_state, hdr, cnt, &dummy);
-    VTSS_I("l2_pol_stat_create: mstream alloc done rc=%d idx=%u", rc, dummy);
     VTSS_RC(rc);
     hdr->move = vtss_mstream_move;
     hdr->clear = vtss_mstream_clear;
