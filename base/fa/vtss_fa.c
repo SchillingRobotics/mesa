@@ -3,7 +3,6 @@
 
 #include "vtss_fa_cil.h"
 
-#include <errno.h>
 #include <stdlib.h>
 
 #if defined(VTSS_ARCH_FA)
@@ -1159,34 +1158,8 @@ static vtss_rc vtss_fa_verify_target(vtss_state_t *vtss_state)
 vtss_rc vtss_cil_init_conf_set(struct vtss_state_s *vtss_state)
 {
     u32 i;
-    int stop_stage = -1;
-    const char *stop_env;
-    char *end = NULL;
-
-    stop_env = getenv("MESA_STOP_AFTER_CIL_STAGE");
-    if (stop_env != NULL && *stop_env != '\0') {
-        long v;
-
-        errno = 0;
-        v = strtol(stop_env, &end, 10);
-        if (errno == 0 && end != stop_env && *end == '\0' && v >= 0 && v <= 1000) {
-            stop_stage = (int)v;
-            VTSS_I("CIL stop stage enabled: %d", stop_stage);
-        } else {
-            VTSS_E("Invalid MESA_STOP_AFTER_CIL_STAGE='%s'", stop_env);
-        }
-    }
-
-#define CIL_STOP_HIT(stage, name)                                                                  \
-    do {                                                                                           \
-        if (stop_stage == (stage)) {                                                               \
-            VTSS_I("CIL stop stage hit: %d (%s)", (stage), (name));                              \
-            return VTSS_RC_OK;                                                                     \
-        }                                                                                          \
-    } while (0)
 
     VTSS_PROF_ENTER(LM_PROF_ID_MESA_INIT, 1);
-    CIL_STOP_HIT(1, "entry");
     // Reset switch core if using SPI from external CPU
     VTSS_PROF_ENTER(LM_PROF_ID_MESA_INIT, 2);
 #if defined(VTSS_ARCH_LAN969X)
@@ -1197,35 +1170,17 @@ vtss_rc vtss_cil_init_conf_set(struct vtss_state_s *vtss_state)
         (void)lag_reg_indirect_access(vtss_state, 0xE00C008CU, &val, TRUE);
     }
 #endif
-    CIL_STOP_HIT(2, "after optional spi soft reset");
 
     /* Initialize Switchcore and internal RAMs */
     if (fa_init_switchcore(vtss_state) != VTSS_RC_OK) {
         VTSS_E("Switchcore initialization error");
         return VTSS_RC_ERROR;
     }
-    CIL_STOP_HIT(3, "after fa_init_switchcore");
-    /* Initialize the LC-PLL (core clock) and set affected registers.
-     * On LAN969x appl (non-SPI reg access), firmware/kernel has already
-     * established clocks; reprogramming PLLs here can stall certain boards.
-     * Keep legacy behavior available via MESA_FORCE_CORE_CLOCK_CONFIG=1. */
-    BOOL skip_core_clock_config = env_enabled("MESA_SKIP_CORE_CLOCK_CONFIG");
-#if defined(VTSS_ARCH_LAN969X)
-    if (!vtss_state->init_conf.spi_bus && !env_enabled("MESA_FORCE_CORE_CLOCK_CONFIG")) {
-        skip_core_clock_config = TRUE;
-    }
-#endif
-    if (skip_core_clock_config) {
-        if (vtss_state->init_conf.core_clock.freq == VTSS_CORE_CLOCK_DEFAULT) {
-#if defined(VTSS_ARCH_LAN969X)
-            vtss_state->init_conf.core_clock.freq = VTSS_CORE_CLOCK_328MHZ;
-#endif
-        }
-        VTSS_I("Skipping core clock reconfiguration");
-    } else if (fa_core_clock_config(vtss_state) != VTSS_RC_OK) {
+
+    /* Initialize the LC-PLL (core clock) and set affected registers */
+    if (fa_core_clock_config(vtss_state) != VTSS_RC_OK) {
         VTSS_E("LC-PLL initialization error");
     }
-    CIL_STOP_HIT(4, "after fa_core_clock_config");
 
     /* Enable switch core and queue system */
     REG_WR(VTSS_HSCH_RESET_CFG, VTSS_F_HSCH_RESET_CFG_CORE_ENA(1));
@@ -1233,7 +1188,6 @@ vtss_rc vtss_cil_init_conf_set(struct vtss_state_s *vtss_state)
         REG_WRM_SET(VTSS_QFWD_SWITCH_PORT_MODE(i), VTSS_M_QFWD_SWITCH_PORT_MODE_PORT_ENA);
     }
     VTSS_PROF_EXIT(LM_PROF_ID_MESA_INIT, 2);
-    CIL_STOP_HIT(5, "after enabling core and queue system");
 
     /* Set ASM/DSM watermarks for cpu traffic (see JR2) - needed here or handled
      * by wm function ? TBD-BJO */
@@ -1271,17 +1225,13 @@ vtss_rc vtss_cil_init_conf_set(struct vtss_state_s *vtss_state)
     VTSS_RC(vtss_cil_misc_chip_id_get(vtss_state, &vtss_state->misc.chip_id));
     VTSS_I("chip_id: 0x%04x, revision: 0x%04x",
            vtss_state->misc.chip_id.part_number, vtss_state->misc.chip_id.revision);
-    CIL_STOP_HIT(6, "after chip id read");
 
     /* Compare API target with chip part number */
     VTSS_RC(vtss_fa_verify_target(vtss_state));
-    CIL_STOP_HIT(7, "after target verify");
 
     /* Initialize function groups */
     VTSS_RC(vtss_fa_init_groups(vtss_state, VTSS_INIT_CMD_INIT));
-    CIL_STOP_HIT(8, "after vtss_fa_init_groups");
     VTSS_PROF_EXIT(LM_PROF_ID_MESA_INIT, 1);
-#undef CIL_STOP_HIT
     return VTSS_RC_OK;
 }
 
