@@ -156,7 +156,6 @@ vtss_rc vtss_inst_get(const vtss_target_type_t target, vtss_inst_create_t *const
 static vtss_rc vtss_ail_create(vtss_state_t *vtss_state, BOOL create_pre)
 {
     vtss_state->create_pre = create_pre;
-    VTSS_I("vtss_ail_create: phase=%s", create_pre ? "pre" : "post");
 
     if (create_pre) {
         // General default constants
@@ -170,75 +169,51 @@ static vtss_rc vtss_ail_create(vtss_state_t *vtss_state, BOOL create_pre)
     }
 
 #if defined(VTSS_FEATURE_MISC)
-    VTSS_I("vtss_ail_create: misc begin");
     VTSS_RC(vtss_misc_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: misc done");
 #endif /* VTSS_FEATURE_MISC */
 
 #if defined(VTSS_FEATURE_PORT_CONTROL)
-    VTSS_I("vtss_ail_create: port begin");
     VTSS_RC(vtss_port_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: port done");
 #endif /* VTSS_FEATURE_PORT_CONTROL */
 
 #if defined(VTSS_FEATURE_PACKET)
-    VTSS_I("vtss_ail_create: packet begin");
     VTSS_RC(vtss_packet_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: packet done");
 #endif /* VTSS_FEATURE_PACKET */
 
 #if defined(VTSS_FEATURE_AFI_SWC) && defined(VTSS_AFI_V2)
-    VTSS_I("vtss_ail_create: afi begin");
     VTSS_RC(vtss_afi_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: afi done");
 #endif /* VTSS_FEATURE_AFI_SWC && VTSS_AFI_V2 */
 
 #if defined(VTSS_FEATURE_QOS)
-    VTSS_I("vtss_ail_create: qos begin");
     VTSS_RC(vtss_qos_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: qos done");
 #endif /* VTSS_FEATURE_QOS */
 
 #if defined(VTSS_FEATURE_HQOS)
-    VTSS_I("vtss_ail_create: hqos begin");
     VTSS_RC(vtss_hqos_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: hqos done");
 #endif /* VTSS_FEATURE_HQOS */
 
 #if defined(VTSS_FEATURE_LAYER2)
-    VTSS_I("vtss_ail_create: l2 begin");
     VTSS_RC(vtss_l2_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: l2 done");
 #endif /* VTSS_FEATURE_LAYER2 */
 
 #if defined(VTSS_FEATURE_LAYER3)
-    VTSS_I("vtss_ail_create: l3 begin");
     VTSS_RC(vtss_l3_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: l3 done");
 #endif /* VTSS_FEATURE_LAYER2 */
 
 #if defined(VTSS_FEATURE_VCAP)
-    VTSS_I("vtss_ail_create: vcap begin");
     VTSS_RC(vtss_vcap_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: vcap done");
 #endif /* VTSS_FEATURE_VCAP */
 
 #if defined(VTSS_FEATURE_VOP)
-    VTSS_I("vtss_ail_create: vop begin");
     VTSS_RC(vtss_oam_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: vop done");
 #endif /* VTSS_FEATURE_VOP */
 
 #if defined(VTSS_FEATURE_MRP)
-    VTSS_I("vtss_ail_create: mrp begin");
     VTSS_RC(vtss_mrp_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: mrp done");
 #endif /* VTSS_FEATURE_MRP */
 
 #if defined(VTSS_FEATURE_TIMESTAMP)
-    VTSS_I("vtss_ail_create: ts begin");
     VTSS_RC(vtss_ts_inst_create(vtss_state));
-    VTSS_I("vtss_ail_create: ts done");
 #endif /* VTSS_FEATURE_TIMESTAMP */
 
     return VTSS_RC_OK;

@@ -279,7 +279,6 @@ static void lan966x_init_port_table(meba_inst_t inst, int port_cnt, port_map_t *
 
     /* Fill out port mapping table */
     if (port_cnt > 30) {
-        T_E(inst, "LAN969X map init: invalid port_cnt=%d, clamping to 30", port_cnt);
         port_cnt = 30;
     }
 
@@ -342,9 +341,7 @@ static mesa_rc lan969x_board_init(meba_inst_t inst)
 
     /* SGPIO setup - skip for PCB8398 custom board (no SGPIO hardware connected) */
     if (board->type == BOARD_TYPE_LAGUNA_PCB8422) {
-        if (mesa_sgpio_conf_get(NULL, 0, 0, &conf) != MESA_RC_OK) {
-            T_E(inst, "Could not get sgpio conf");
-        }
+        (void)mesa_sgpio_conf_get(NULL, 0, 0, &conf);
         // Static PCB8422 SGPIO board config
         uint8_t sgpio[10] = {0, 4, 8, 12, 16, 20, 24, 25, 26, 27};
         // The SGPIO ports are mapped to the port device of the chip
@@ -369,9 +366,7 @@ static mesa_rc lan969x_board_init(meba_inst_t inst)
         conf.port_conf[29].mode[2] = MESA_SGPIO_MODE_ON;
         conf.port_conf[29].mode[3] = MESA_SGPIO_MODE_ON;
 
-        if (mesa_sgpio_conf_set(NULL, 0, 0, &conf) != MESA_RC_OK) {
-            T_E(inst, "Could not set sgpio conf");
-        }
+        (void)mesa_sgpio_conf_set(NULL, 0, 0, &conf);
     } /* end SGPIO setup for PCB8422 only */
 
     // Status LED off (application will turn on)
@@ -559,7 +554,6 @@ static mesa_rc lan969x_sfp_insertion_status_get(meba_inst_t inst, mesa_port_list
             }
             if (pcb8398_sfp_gpio_get(inst, port_no, SFP_DETECT, &detect)) {
                 mesa_port_list_set(present, port_no, detect);
-                T_N(inst, "port:%d, status:%d", port_no, detect);
             }
         }
         return MESA_RC_OK;
