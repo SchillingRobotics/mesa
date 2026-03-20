@@ -3,8 +3,6 @@
 
 #include "vtss_fa_cil.h"
 
-#include <stdlib.h>
-
 #if defined(VTSS_ARCH_FA)
 
 #if defined(VTSS_FEATURE_CLOCK)
@@ -623,6 +621,7 @@ static vtss_rc fa_core_ref_clk_config(vtss_state_t *vtss_state)
             break;
         }
     }
+
     REG_WRM(VTSS_CHIP_TOP_SPARE_PLL_CFG, VTSS_F_CHIP_TOP_SPARE_PLL_CFG_ASSIGN_TO_CORE(0),
             VTSS_M_CHIP_TOP_SPARE_PLL_CFG_ASSIGN_TO_CORE);
 
@@ -835,10 +834,7 @@ static vtss_rc fa_core_clock_config(vtss_state_t *vtss_state)
                 vtss_state->init_conf.core_clock.ref_freq = VTSS_CORE_REF_CLK_25MHZ;
             }
         }
-        rc = fa_core_ref_clk_config(vtss_state);
-        if (rc != VTSS_RC_OK) {
-            return rc;
-        }
+        VTSS_RC(fa_core_ref_clk_config(vtss_state));
 
         pol_upd_int = 820U; // Laguna default
 
@@ -1084,7 +1080,6 @@ vtss_rc vtss_cil_init_conf_set(struct vtss_state_s *vtss_state)
         VTSS_E("Switchcore initialization error");
         return VTSS_RC_ERROR;
     }
-
     /* Initialize the LC-PLL (core clock) and set affected registers */
     if (fa_core_clock_config(vtss_state) != VTSS_RC_OK) {
         VTSS_E("LC-PLL initialization error");
