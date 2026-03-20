@@ -278,10 +278,6 @@ static void lan966x_init_port_table(meba_inst_t inst, int port_cnt, port_map_t *
     mesa_port_no_t      port_no;
 
     /* Fill out port mapping table */
-    if (port_cnt > 30) {
-        port_cnt = 30;
-    }
-
     board->port_cnt = port_cnt;
     for (port_no = 0; port_no < port_cnt; port_no++) {
         port_entry_map(&board->port[port_no].map, &map[port_no]);
@@ -726,6 +722,7 @@ static mesa_rc lan969x_reset(meba_inst_t inst, meba_reset_point_t reset)
     meba_board_state_t *board = INST2BOARD(inst);
     mesa_rc             rc = MESA_RC_OK;
 
+    T_D(inst, "Called - %d", reset);
     switch (reset) {
     case MEBA_BOARD_INITIALIZE:      lan969x_board_init(inst); break;
     case MEBA_PORT_RESET:            break;
@@ -790,6 +787,7 @@ static mesa_rc lan969x_reset(meba_inst_t inst, meba_reset_point_t reset)
         break;
     default: rc = MESA_RC_ERROR;
     }
+    T_D(inst, "Called - %d - Done", reset);
     return rc;
 }
 
@@ -1240,7 +1238,7 @@ static mesa_rc lan969x_sensor_get(meba_inst_t inst, meba_sensor_t type, int six,
 meba_inst_t lan969x_initialize(meba_inst_t inst, const meba_board_interface_t *callouts)
 {
     meba_board_state_t *board;
-    int                 pcb = 0, target = 0, pcb_var = 0, port_cnt = 0;
+    int                 pcb, target, pcb_var, port_cnt = 0;
 
     board = INST2BOARD(inst);
 
@@ -1301,6 +1299,7 @@ meba_inst_t lan969x_initialize(meba_inst_t inst, const meba_board_interface_t *c
         inst->props.target, inst->props.mux_mode, board->port_cnt);
 
     // Hook up board API functions
+    T_D(inst, "Hooking up board API");
     inst->api.meba_capability = lan969x_capability;
     inst->api.meba_port_entry_get = lan969x_port_entry_get;
     inst->api.meba_reset = lan969x_reset;
