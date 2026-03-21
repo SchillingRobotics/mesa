@@ -142,9 +142,9 @@ static uint8_t pcb8398_sfp_i2c_port_get(void)
 {
     const char *s = getenv("MESA_PCB8398_SFP_I2C_PORT");
 
-    /* Default to bus 1 (GPIO 28/29 on this board). */
+    /* Default to bus 0 (DTS aliases i2c0 = &i2c1, GPIO 28/29). */
     if (s == NULL || *s == '\0') {
-        return 1;
+        return 0;
     }
 
     {
@@ -154,7 +154,7 @@ static uint8_t pcb8398_sfp_i2c_port_get(void)
         }
     }
 
-    return 1;
+    return 0;
 }
 
 static port_map_t *meba_port_map = NULL;
@@ -210,9 +210,9 @@ static port_map_t port_table_pcb8398[] = {
     {23, MESA_MIIM_CONTROLLER_0,    27, MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
     MESA_BW_1G,                                                                                                     0,  0, 1, 0, 0 },
     {26, MESA_MIIM_CONTROLLER_NONE, 0,  MESA_PORT_INTERFACE_SFI,        LAGUNA_CAP_10G_FDX,
-    MESA_BW_10G,                                                                                                       255, 1, 0, 0, 0 },
+    MESA_BW_10G,                                                                                                       255, 0, 0, 0, 0 },
     {27, MESA_MIIM_CONTROLLER_NONE, 0,  MESA_PORT_INTERFACE_SFI,        LAGUNA_CAP_10G_FDX,
-    MESA_BW_10G,                                                                                                       255, 1, 0, 0, 0 },
+    MESA_BW_10G,                                                                                                       255, 0, 0, 0, 0 },
 };
 
 static port_map_t port_table_pcb8422[] = {
