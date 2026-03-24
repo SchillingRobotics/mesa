@@ -1364,9 +1364,61 @@ static void cli_cmd_phy_dump(cli_req_t *req)
     }
 }
 
+/* Port Power Control - Control 24V power to ethernet ports via 74HC595 shift registers */
+static void cli_cmd_port_power(cli_req_t *req)
+{
+    mesa_port_no_t uport, iport;
+    mesa_rc        rc;
+    mesa_bool_t    enabled;
+    mesa_bool_t    first = 1;
+
+    if (req->set) {
+        /* Set port power state */
+        for (iport = 0; iport < mesa_port_cnt(NULL); iport++) {
+            uport = iport2uport(iport);
+            if (req->port_list[uport] == 0) {
+                continue;
+            }
+            rc = MEBA_WRAP(meba_port_power_set, meba_global_inst, iport, req->enable);
+            if (rc == MESA_RC_NOT_IMPLEMENTED) {
+                cli_printf("Port power control not available on this board\n");
+                return;
+            } else if (rc != MESA_RC_OK) {
+                cli_printf("Port %u: Failed to %s power\n", uport, req->enable ? "enable" : "disable");
+            } else {
+                cli_printf("Port %u: Power %s\n", uport, req->enable ? "ON" : "OFF");
+            }
+        }
+    } else {
+        /* Show port power status */
+        for (iport = 0; iport < mesa_port_cnt(NULL); iport++) {
+            uport = iport2uport(iport);
+            if (req->port_list[uport] == 0) {
+                continue;
+            }
+            rc = MEBA_WRAP(meba_port_power_get, meba_global_inst, iport, &enabled);
+            if (rc == MESA_RC_NOT_IMPLEMENTED) {
+                cli_printf("Port power control not available on this board\n");
+                return;
+            }
+            if (first) {
+                cli_table_header("Port  Power");
+                first = 0;
+            }
+            if (rc == MESA_RC_OK) {
+                cli_printf("%-6u%s\n", uport, enabled ? "ON" : "OFF");
+            } else {
+                cli_printf("%-6u%s\n", uport, "N/A");
+            }
+        }
+    }
+}
+
 static cli_cmd_t cli_cmd_table[] = {
     {"Port State [<port_list>] [enable|disable]", "Set or show the port administrative state",
      cli_cmd_port_state},
+    {"Port Power [<port_list>] [enable|disable]", "Set or show 24V port power (PCB8398, ports 1-16)",
+     cli_cmd_port_power},
     {"Port Mode [<port_list>] [10hdx|10fdx|100hdx|100fdx|1000fdx|2500|5g|10g|25g|auto]",
      "Set or show the port speed and duplex mode", cli_cmd_port_mode},
     {"Port Advertisement [<port_list>] [hdx|fdx|10|100|1000|2500|5g|10g] [enable|disable]",

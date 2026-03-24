@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <dirent.h>
+#include <string.h>
 
 #include <microchip/ethernet/board/api.h>
 
@@ -19,6 +22,9 @@
 #define VTSS_TS_IO_ARRAY_SIZE 8 // Laguna has 8 pins compared to 4 on FireAnt.
 
 #define INDYPHY_INTERRUPT 11
+
+/* Number of ports with 24V power control via 74HC595 shift registers */
+#define PORT_POWER_COUNT 16
 
 /* Local mapping table */
 typedef struct {
@@ -426,6 +432,301 @@ out:
     pcb8398_sfp_i2c_lock_release();
 
     return rc;
+}
+
+/* ============================================================================
+ * Port Power Control via 74HC595 shift registers (Linux gpiolib sysfs)
+ *
+ * The 74HC595 GPIO expander is exposed as a gpiochip in /sys/class/gpio/.
+ * We find its base GPIO number by scanning for label "74hc595", then access
+ * individual port power GPIOs via sysfs.
+ * ============================================================================
+ */
+
+/**
+ * Find the base GPIO number of the 74HC595 gpiochip.
+ * Returns the base number, or -1 if not found.
+ */
+static int pcb8398_port_power_find_gpiochip(meba_inst_t inst)
+{
+    DIR           *dp;
+    struct dirent *ep;
+    int            base = -1;
+
+    dp = opendir("/sys/class/gpio/");
+    if (dp == NULL) {
+        T_I(inst, "Cannot open /sys/class/gpio/");
+        return -1;
+    }
+
+    while ((ep = readdir(dp)) != NULL) {
+        if (strncmp(ep->d_name, "gpiochip", 8) != 0) {
+            continue;
+        }
+
+        char label_path[512];
+        snprintf(label_path, sizeof(label_path), "/sys/class/gpio/%s/label", ep->d_name);
+
+        int fd = open(label_path, O_RDONLY);
+        if (fd < 0) {
+            continue;
+        }
+
+        char label[64] = {0};
+        ssize_t n = read(fd, label, sizeof(label) - 1);
+        close(fd);
+
+        if (n <= 0) {
+            continue;
+        }
+
+        /* Remove trailing newline */
+        if (n > 0 && label[n - 1] == '\n') {
+            label[n - 1] = '\0';
+        }
+
+        if (strstr(label, "74hc595") != NULL || strstr(label, "74x164") != NULL) {
+            /* Found it - read base number */
+            char base_path[512];
+            snprintf(base_path, sizeof(base_path), "/sys/class/gpio/%s/base", ep->d_name);
+
+            fd = open(base_path, O_RDONLY);
+            if (fd >= 0) {
+                char buf[32] = {0};
+                if (read(fd, buf, sizeof(buf) - 1) > 0) {
+                    base = atoi(buf);
+                }
+                close(fd);
+            }
+            T_I(inst, "Found 74HC595 port power gpiochip: %s, base=%d", ep->d_name, base);
+            break;
+        }
+    }
+
+    closedir(dp);
+    return base;
+}
+
+/**
+ * Export a GPIO to sysfs if not already exported.
+ */
+static mesa_bool_t pcb8398_port_power_gpio_export(meba_inst_t inst, int gpio_num)
+{
+    char gpio_path[64];
+    snprintf(gpio_path, sizeof(gpio_path), "/sys/class/gpio/gpio%d", gpio_num);
+
+    /* Check if already exported */
+    if (access(gpio_path, F_OK) == 0) {
+        return TRUE;
+    }
+
+    /* Export it */
+    int fd = open("/sys/class/gpio/export", O_WRONLY);
+    if (fd < 0) {
+        T_E(inst, "Cannot open /sys/class/gpio/export");
+        return FALSE;
+    }
+
+    char buf[16];
+    int len = snprintf(buf, sizeof(buf), "%d", gpio_num);
+    ssize_t written = write(fd, buf, len);
+    close(fd);
+
+    if (written != len) {
+        T_E(inst, "Failed to export GPIO %d", gpio_num);
+        return FALSE;
+    }
+
+    /* Brief delay for sysfs to create the node */
+    usleep(10000);
+
+    /* Set direction to output (if direction file exists).
+     * Output-only expanders like 74HC595 may not have a direction file
+     * since they are inherently output-only. */
+    snprintf(gpio_path, sizeof(gpio_path), "/sys/class/gpio/gpio%d/direction", gpio_num);
+    fd = open(gpio_path, O_WRONLY);
+    if (fd >= 0) {
+        written = write(fd, "out", 3);
+        close(fd);
+        if (written != 3) {
+            T_E(inst, "Failed to set GPIO %d direction", gpio_num);
+            return FALSE;
+        }
+    }
+    /* If direction file doesn't exist, that's OK for output-only expanders */
+
+    return TRUE;
+}
+
+/**
+ * Set a port power GPIO value.
+ */
+static mesa_bool_t pcb8398_port_power_gpio_set(meba_inst_t inst, int gpio_num, mesa_bool_t value)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", gpio_num);
+
+    int fd = open(path, O_WRONLY);
+    if (fd < 0) {
+        T_E(inst, "Cannot open %s for writing", path);
+        return FALSE;
+    }
+
+    const char *val_str = value ? "1" : "0";
+    ssize_t written = write(fd, val_str, 1);
+    close(fd);
+
+    T_D(inst, "GPIO %d: wrote '%s', result=%zd", gpio_num, val_str, written);
+    return (written == 1);
+}
+
+/**
+ * Read a port power GPIO value.
+ */
+static mesa_bool_t pcb8398_port_power_gpio_get(meba_inst_t inst, int gpio_num, mesa_bool_t *value)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", gpio_num);
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        T_E(inst, "Cannot open %s for reading", path);
+        return FALSE;
+    }
+
+    char buf[4] = {0};
+    ssize_t bytes_read = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+
+    if (bytes_read <= 0) {
+        T_E(inst, "Failed to read GPIO %d value", gpio_num);
+        return FALSE;
+    }
+
+    *value = (buf[0] == '1') ? TRUE : FALSE;
+    T_D(inst, "GPIO %d: read '%c' -> %s", gpio_num, buf[0], *value ? "ON" : "OFF");
+    return TRUE;
+}
+
+/**
+ * Initialize port power control: find gpiochip and export all GPIOs.
+ */
+static void pcb8398_port_power_init(meba_inst_t inst)
+{
+    meba_board_state_t *board = INST2BOARD(inst);
+
+    board->port_power_gpio_base = -1;
+    board->port_power_state = 0;
+
+    if (board->type != BOARD_TYPE_LAGUNA_PCB8398) {
+        return;
+    }
+
+    int base = pcb8398_port_power_find_gpiochip(inst);
+    if (base < 0) {
+        T_I(inst, "74HC595 port power gpiochip not found - power control unavailable");
+        return;
+    }
+
+    board->port_power_gpio_base = base;
+
+    /* Export all 16 GPIOs and set initial state to OFF */
+    for (int i = 0; i < PORT_POWER_COUNT; i++) {
+        if (!pcb8398_port_power_gpio_export(inst, base + i)) {
+            T_E(inst, "Failed to export port power GPIO %d", i);
+        }
+        /* Set initial state to OFF */
+        pcb8398_port_power_gpio_set(inst, base + i, FALSE);
+    }
+
+    T_I(inst, "Port power control initialized with gpio base %d", base);
+}
+
+/**
+ * Set port power state (MEBA API wrapper).
+ * port_no: logical port number (0-15 for port power control)
+ * enable: TRUE to enable 24V power, FALSE to disable
+ * Returns: MESA_RC_OK on success,
+ *          MESA_RC_NOT_IMPLEMENTED if port power control not available,
+ *          MESA_RC_ERROR on failure.
+ */
+static mesa_rc lan969x_port_power_set(meba_inst_t inst, mesa_port_no_t port_no, mesa_bool_t enable)
+{
+    meba_board_state_t *board = INST2BOARD(inst);
+
+    if (board->type != BOARD_TYPE_LAGUNA_PCB8398) {
+        return MESA_RC_NOT_IMPLEMENTED;
+    }
+
+    if (board->port_power_gpio_base < 0) {
+        /* Port power control not available (74HC595 gpiochip not found) */
+        return MESA_RC_NOT_IMPLEMENTED;
+    }
+
+    /* Only the first 16 ports have power control */
+    if (port_no >= PORT_POWER_COUNT) {
+        return MESA_RC_OK;  /* Not an error, just no power control for this port */
+    }
+
+    int gpio_num = board->port_power_gpio_base + port_no;
+
+    if (!pcb8398_port_power_gpio_set(inst, gpio_num, enable)) {
+        T_E(inst, "Failed to set port %u power to %s", port_no, enable ? "ON" : "OFF");
+        return MESA_RC_ERROR;
+    }
+
+    /* Update state tracking */
+    if (enable) {
+        board->port_power_state |= (1U << port_no);
+    } else {
+        board->port_power_state &= ~(1U << port_no);
+    }
+
+    T_I(inst, "Port %u power %s (gpio %d)", port_no, enable ? "ON" : "OFF", gpio_num);
+    return MESA_RC_OK;
+}
+
+/**
+ * Get port power state (MEBA API).
+ * port_no: logical port number (0-15 for port power control)
+ * enabled: [OUT] current power state
+ * Returns: MESA_RC_OK on success,
+ *          MESA_RC_NOT_IMPLEMENTED if port power control not available,
+ *          MESA_RC_ERROR on failure.
+ */
+static mesa_rc lan969x_port_power_get(meba_inst_t inst, mesa_port_no_t port_no, mesa_bool_t *enabled)
+{
+    meba_board_state_t *board = INST2BOARD(inst);
+
+    if (enabled == NULL) {
+        return MESA_RC_ERROR;
+    }
+
+    if (board->type != BOARD_TYPE_LAGUNA_PCB8398) {
+        return MESA_RC_NOT_IMPLEMENTED;
+    }
+
+    if (board->port_power_gpio_base < 0) {
+        /* Port power control not available (74HC595 gpiochip not found) */
+        return MESA_RC_NOT_IMPLEMENTED;
+    }
+
+    /* Only the first 16 ports have power control */
+    if (port_no >= PORT_POWER_COUNT) {
+        *enabled = FALSE;
+        return MESA_RC_OK;
+    }
+
+    int gpio_num = board->port_power_gpio_base + port_no;
+
+    /* Read actual GPIO state from sysfs */
+    if (!pcb8398_port_power_gpio_get(inst, gpio_num, enabled)) {
+        /* Fall back to cached state */
+        *enabled = (board->port_power_state & (1U << port_no)) ? TRUE : FALSE;
+        T_D(inst, "Port %u: using cached state: %s", port_no, *enabled ? "ON" : "OFF");
+    }
+
+    return MESA_RC_OK;
 }
 
 static port_map_t *meba_port_map = NULL;
@@ -1586,6 +1887,9 @@ meba_inst_t lan969x_initialize(meba_inst_t inst, const meba_board_interface_t *c
     default: break;
     }
 
+    /* Initialize 24V port power control (PCB8398 only) */
+    pcb8398_port_power_init(inst);
+
     T_I(inst, "Board: %s, type %d, target %4x, mux %d, %d ports", inst->props.name, board->type,
         inst->props.target, inst->props.mux_mode, board->port_cnt);
 
@@ -1599,6 +1903,8 @@ meba_inst_t lan969x_initialize(meba_inst_t inst, const meba_board_interface_t *c
     inst->api.meba_sfp_insertion_status_get = lan969x_sfp_insertion_status_get;
     inst->api.meba_sfp_status_get = lan969x_sfp_status_get;
     inst->api.meba_port_admin_state_set = lan969x_port_admin_state_set;
+    inst->api.meba_port_power_set = lan969x_port_power_set;
+    inst->api.meba_port_power_get = lan969x_port_power_get;
     inst->api.meba_port_led_update = lan969x_port_led_update;
     inst->api.meba_led_intensity_set = NULL;
     inst->api.meba_fan_param_get = NULL;
