@@ -64,6 +64,9 @@ typedef struct meba_board_state {
     const board_func_t    *func;
     mepa_device_t         *phy_devices[MAX_PORTS];
     mesa_port_status_t     status[MAX_PORTS];
+    /* PCB8398 24V port power control via 74HC595 shift registers */
+    int                    port_power_gpio_base;  /* gpiochip base, -1 if unavailable */
+    uint16_t               port_power_state;      /* bitmask of enabled ports (16 bits) */
 } meba_board_state_t;
 
 #define PORT_2_BOARD_PORT(board, p) (board->port[p].board_port)
