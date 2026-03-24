@@ -82,10 +82,12 @@ typedef enum { SFP_DETECT, SFP_FAULT, SFP_LOS } sfp_signal_t;
 
 typedef struct {
     mesa_bool_t valid;
+    uint8_t     gpio_sda;
     uint8_t     gpio_moddet;
     uint8_t     gpio_txfault;
     uint8_t     gpio_los;
     uint8_t     gpio_txdis;
+    uint8_t     gpio_rs;
 } sfp_gpio_map_t;
 
 /* Custom PCB8398 wiring:
@@ -93,28 +95,51 @@ typedef struct {
  * - SFP2 diag on GPIO 36..41
  * Map logical ports 26/27 to these two cages. */
 static const sfp_gpio_map_t pcb8398_sfp_gpio_map[30] = {
-    [26] = {.valid = TRUE, .gpio_moddet = 64, .gpio_txfault = 62, .gpio_los = 65, .gpio_txdis = 63},
-    [27] = {.valid = TRUE, .gpio_moddet = 39, .gpio_txfault = 37, .gpio_los = 40, .gpio_txdis = 38},
+    [26] = {.valid = TRUE, .gpio_sda = 61, .gpio_moddet = 64, .gpio_txfault = 62,
+            .gpio_los = 65, .gpio_txdis = 63, .gpio_rs = 66},
+    [27] = {.valid = TRUE, .gpio_sda = 36, .gpio_moddet = 39, .gpio_txfault = 37,
+            .gpio_los = 40, .gpio_txdis = 38, .gpio_rs = 41},
 };
+
+static const sfp_gpio_map_t *pcb8398_sfp_gpio_map_get(meba_inst_t inst,
+                                                       mesa_port_no_t port_no)
+{
+    meba_board_state_t *board = INST2BOARD(inst);
+    uint32_t            chip_port;
+
+    if (board->type != BOARD_TYPE_LAGUNA_PCB8398 || port_no >= board->port_cnt) {
+        return NULL;
+    }
+
+    chip_port = board->port[port_no].map.map.chip_port;
+    if (chip_port >= (sizeof(pcb8398_sfp_gpio_map) / sizeof(pcb8398_sfp_gpio_map[0]))) {
+        return NULL;
+    }
+
+    if (!pcb8398_sfp_gpio_map[chip_port].valid) {
+        return NULL;
+    }
+
+    return &pcb8398_sfp_gpio_map[chip_port];
+}
 
 static mesa_bool_t pcb8398_sfp_gpio_get(meba_inst_t inst, mesa_port_no_t port_no, sfp_signal_t sfp,
                                         mesa_bool_t *value)
 {
-    meba_board_state_t *board = INST2BOARD(inst);
+    const sfp_gpio_map_t *map = pcb8398_sfp_gpio_map_get(inst, port_no);
     mesa_bool_t         v = 0;
     uint8_t             gpio_no;
 
-    if (value == NULL || board->type != BOARD_TYPE_LAGUNA_PCB8398 || port_no >= 30 ||
-        !pcb8398_sfp_gpio_map[port_no].valid) {
+    if (value == NULL || map == NULL) {
         return FALSE;
     }
 
     if (sfp == SFP_DETECT) {
-        gpio_no = pcb8398_sfp_gpio_map[port_no].gpio_moddet;
+        gpio_no = map->gpio_moddet;
     } else if (sfp == SFP_FAULT) {
-        gpio_no = pcb8398_sfp_gpio_map[port_no].gpio_txfault;
+        gpio_no = map->gpio_txfault;
     } else {
-        gpio_no = pcb8398_sfp_gpio_map[port_no].gpio_los;
+        gpio_no = map->gpio_los;
     }
 
     if (mesa_gpio_read(NULL, 0, gpio_no, &v) != MESA_RC_OK) {
@@ -132,29 +157,275 @@ static mesa_bool_t pcb8398_sfp_gpio_get(meba_inst_t inst, mesa_port_no_t port_no
 
 static mesa_bool_t pcb8398_sfp_gpio_has_port(meba_inst_t inst, mesa_port_no_t port_no)
 {
-    meba_board_state_t *board = INST2BOARD(inst);
-
-    return (board->type == BOARD_TYPE_LAGUNA_PCB8398 && port_no < 30 &&
-            pcb8398_sfp_gpio_map[port_no].valid);
+    return pcb8398_sfp_gpio_map_get(inst, port_no) != NULL;
 }
 
-static uint8_t pcb8398_sfp_i2c_port_get(void)
-{
-    const char *s = getenv("MESA_PCB8398_SFP_I2C_PORT");
+/* Shared SFP clock GPIO on PCB8398 custom wiring. */
+#define PCB8398_SFP_I2C_SCL_GPIO   60
+#define PCB8398_SFP_I2C_DELAY_US   5
+#define PCB8398_SFP_I2C_LOCK_TRIES 1000
 
-    /* Default to bus 0 (DTS aliases i2c0 = &i2c1, GPIO 28/29). */
-    if (s == NULL || *s == '\0') {
-        return 0;
+static volatile int pcb8398_sfp_i2c_lock;
+
+static mesa_bool_t pcb8398_sfp_i2c_lock_acquire(void)
+{
+    for (int i = 0; i < PCB8398_SFP_I2C_LOCK_TRIES; i++) {
+        if (__sync_lock_test_and_set(&pcb8398_sfp_i2c_lock, 1) == 0) {
+            return TRUE;
+        }
+        usleep(100);
     }
 
-    {
-        long v = strtol(s, NULL, 10);
-        if (v >= 0 && v <= 255) {
-            return (uint8_t)v;
+    return FALSE;
+}
+
+static void pcb8398_sfp_i2c_lock_release(void)
+{
+    __sync_lock_release(&pcb8398_sfp_i2c_lock);
+}
+
+static mesa_bool_t pcb8398_gpio_release_line(uint8_t gpio)
+{
+    if (mesa_gpio_mode_set(NULL, 0, gpio, MESA_GPIO_IN) != MESA_RC_OK) {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static mesa_bool_t pcb8398_gpio_drive_low(uint8_t gpio)
+{
+    if (mesa_gpio_mode_set(NULL, 0, gpio, MESA_GPIO_OUT) != MESA_RC_OK) {
+        return FALSE;
+    }
+    if (mesa_gpio_write(NULL, 0, gpio, 0) != MESA_RC_OK) {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static mesa_bool_t pcb8398_gpio_read_level(uint8_t gpio, mesa_bool_t *value)
+{
+    mesa_bool_t v = 1;
+
+    if (value == NULL) {
+        return FALSE;
+    }
+    if (mesa_gpio_mode_set(NULL, 0, gpio, MESA_GPIO_IN) != MESA_RC_OK) {
+        return FALSE;
+    }
+    if (mesa_gpio_read(NULL, 0, gpio, &v) != MESA_RC_OK) {
+        return FALSE;
+    }
+
+    *value = v ? TRUE : FALSE;
+    return TRUE;
+}
+
+static mesa_bool_t pcb8398_sfp_i2c_setsda(uint8_t sda_gpio, mesa_bool_t high)
+{
+    return high ? pcb8398_gpio_release_line(sda_gpio) : pcb8398_gpio_drive_low(sda_gpio);
+}
+
+static mesa_bool_t pcb8398_sfp_i2c_setscl(mesa_bool_t high)
+{
+    return high ? pcb8398_gpio_release_line(PCB8398_SFP_I2C_SCL_GPIO)
+                : pcb8398_gpio_drive_low(PCB8398_SFP_I2C_SCL_GPIO);
+}
+
+static mesa_bool_t pcb8398_sfp_i2c_getsda(uint8_t sda_gpio, mesa_bool_t *value)
+{
+    return pcb8398_gpio_read_level(sda_gpio, value);
+}
+
+static void pcb8398_sfp_i2c_delay(void)
+{
+    usleep(PCB8398_SFP_I2C_DELAY_US);
+}
+
+static mesa_bool_t pcb8398_sfp_i2c_start(uint8_t sda_gpio)
+{
+    if (!pcb8398_sfp_i2c_setsda(sda_gpio, TRUE) || !pcb8398_sfp_i2c_setscl(TRUE)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+    if (!pcb8398_sfp_i2c_setsda(sda_gpio, FALSE)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+    if (!pcb8398_sfp_i2c_setscl(FALSE)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+
+    return TRUE;
+}
+
+static mesa_bool_t pcb8398_sfp_i2c_stop(uint8_t sda_gpio)
+{
+    if (!pcb8398_sfp_i2c_setsda(sda_gpio, FALSE)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+    if (!pcb8398_sfp_i2c_setscl(TRUE)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+    if (!pcb8398_sfp_i2c_setsda(sda_gpio, TRUE)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+
+    return TRUE;
+}
+
+static mesa_bool_t pcb8398_sfp_i2c_write_bit(uint8_t sda_gpio, mesa_bool_t bit)
+{
+    if (!pcb8398_sfp_i2c_setsda(sda_gpio, bit)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+    if (!pcb8398_sfp_i2c_setscl(TRUE)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+    if (!pcb8398_sfp_i2c_setscl(FALSE)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+
+    return TRUE;
+}
+
+static mesa_bool_t pcb8398_sfp_i2c_read_bit(uint8_t sda_gpio, mesa_bool_t *bit)
+{
+    if (!pcb8398_sfp_i2c_setsda(sda_gpio, TRUE)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+    if (!pcb8398_sfp_i2c_setscl(TRUE)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+    if (!pcb8398_sfp_i2c_getsda(sda_gpio, bit)) {
+        return FALSE;
+    }
+    if (!pcb8398_sfp_i2c_setscl(FALSE)) {
+        return FALSE;
+    }
+    pcb8398_sfp_i2c_delay();
+
+    return TRUE;
+}
+
+static mesa_bool_t pcb8398_sfp_i2c_write_byte(uint8_t sda_gpio, uint8_t byte)
+{
+    mesa_bool_t ack = TRUE;
+
+    for (int i = 7; i >= 0; i--) {
+        if (!pcb8398_sfp_i2c_write_bit(sda_gpio, (byte >> i) & 0x1)) {
+            return FALSE;
+        }
+    }
+    if (!pcb8398_sfp_i2c_read_bit(sda_gpio, &ack)) {
+        return FALSE;
+    }
+
+    return (ack == FALSE);
+}
+
+static mesa_bool_t pcb8398_sfp_i2c_read_byte(uint8_t sda_gpio, uint8_t *byte, mesa_bool_t ack)
+{
+    uint8_t value = 0;
+    mesa_bool_t bit = FALSE;
+
+    if (byte == NULL) {
+        return FALSE;
+    }
+
+    for (int i = 7; i >= 0; i--) {
+        if (!pcb8398_sfp_i2c_read_bit(sda_gpio, &bit)) {
+            return FALSE;
+        }
+        if (bit) {
+            value |= (1U << i);
         }
     }
 
-    return 0;
+    if (!pcb8398_sfp_i2c_write_bit(sda_gpio, ack ? FALSE : TRUE)) {
+        return FALSE;
+    }
+
+    *byte = value;
+    return TRUE;
+}
+
+static mesa_rc pcb8398_sfp_i2c_xfer_gpio(meba_inst_t    inst,
+                                         mesa_port_no_t port_no,
+                                         mesa_bool_t    write,
+                                         uint8_t        i2c_addr,
+                                         uint8_t        addr,
+                                         uint8_t       *data,
+                                         uint8_t        cnt)
+{
+    const sfp_gpio_map_t *map = pcb8398_sfp_gpio_map_get(inst, port_no);
+    uint8_t               sda_gpio;
+    mesa_rc               rc = MESA_RC_ERROR;
+
+    if (map == NULL || data == NULL) {
+        return MESA_RC_ERROR;
+    }
+
+    sda_gpio = map->gpio_sda;
+
+    if (!pcb8398_sfp_i2c_lock_acquire()) {
+        return MESA_RC_ERROR;
+    }
+
+    if (!pcb8398_sfp_i2c_start(sda_gpio)) {
+        goto out;
+    }
+
+    if (!pcb8398_sfp_i2c_write_byte(sda_gpio, (uint8_t)((i2c_addr << 1) | 0x0))) {
+        goto out_stop;
+    }
+    if (!pcb8398_sfp_i2c_write_byte(sda_gpio, addr)) {
+        goto out_stop;
+    }
+
+    if (write) {
+        for (uint8_t i = 0; i < cnt; i++) {
+            if (!pcb8398_sfp_i2c_write_byte(sda_gpio, data[i])) {
+                goto out_stop;
+            }
+        }
+    } else {
+        if (!pcb8398_sfp_i2c_start(sda_gpio)) {
+            goto out;
+        }
+        if (!pcb8398_sfp_i2c_write_byte(sda_gpio, (uint8_t)((i2c_addr << 1) | 0x1))) {
+            goto out_stop;
+        }
+        for (uint8_t i = 0; i < cnt; i++) {
+            mesa_bool_t ack = (i + 1U < cnt) ? TRUE : FALSE;
+
+            if (!pcb8398_sfp_i2c_read_byte(sda_gpio, &data[i], ack)) {
+                goto out_stop;
+            }
+        }
+    }
+
+    rc = MESA_RC_OK;
+
+out_stop:
+    (void)pcb8398_sfp_i2c_stop(sda_gpio);
+out:
+    (void)pcb8398_sfp_i2c_setsda(sda_gpio, TRUE);
+    (void)pcb8398_sfp_i2c_setscl(TRUE);
+    pcb8398_sfp_i2c_lock_release();
+
+    return rc;
 }
 
 static port_map_t *meba_port_map = NULL;
@@ -365,10 +636,16 @@ static mesa_rc lan969x_board_init(meba_inst_t inst)
         (void)mesa_sgpio_conf_set(NULL, 0, 0, &conf);
     } /* end SGPIO setup for PCB8422 only */
 
-    // Status LED off (application will turn on)
-    gpio_no = 61;
-    (void)mesa_gpio_mode_set(NULL, 0, gpio_no, MESA_GPIO_OUT);
-    (void)mesa_gpio_write(NULL, 0, gpio_no, 1);
+    /*
+     * PCB8398 repurposes GPIO61 as SFP1 SDA, so do not drive it as status LED.
+     * Keep legacy status LED behavior for boards that still wire GPIO61 to LED.
+     */
+    if (board->type != BOARD_TYPE_LAGUNA_PCB8398) {
+        // Status LED off (application will turn on)
+        gpio_no = 61;
+        (void)mesa_gpio_mode_set(NULL, 0, gpio_no, MESA_GPIO_OUT);
+        (void)mesa_gpio_write(NULL, 0, gpio_no, 1);
+    }
 
     if (board->type == BOARD_TYPE_LAGUNA_PCB8422) {
         mesa_mdio_conf_t mdio = {};
@@ -384,17 +661,20 @@ static mesa_rc lan969x_board_init(meba_inst_t inst)
     (void)mesa_gpio_write(NULL, 0, gpio_no, 1);
 
     if (board->type == BOARD_TYPE_LAGUNA_PCB8398) {
-        for (mesa_port_no_t p = 0; p < 30; p++) {
-            if (!pcb8398_sfp_gpio_map[p].valid) {
+        for (mesa_port_no_t p = 0; p < board->port_cnt; p++) {
+            const sfp_gpio_map_t *map = pcb8398_sfp_gpio_map_get(inst, p);
+
+            if (map == NULL) {
                 continue;
             }
 
-            (void)mesa_gpio_mode_set(NULL, 0, pcb8398_sfp_gpio_map[p].gpio_moddet, MESA_GPIO_IN);
-            (void)mesa_gpio_mode_set(NULL, 0, pcb8398_sfp_gpio_map[p].gpio_txfault, MESA_GPIO_IN);
-            (void)mesa_gpio_mode_set(NULL, 0, pcb8398_sfp_gpio_map[p].gpio_los, MESA_GPIO_IN);
-            (void)mesa_gpio_mode_set(NULL, 0, pcb8398_sfp_gpio_map[p].gpio_txdis, MESA_GPIO_OUT);
+            (void)mesa_gpio_mode_set(NULL, 0, map->gpio_moddet, MESA_GPIO_IN);
+            (void)mesa_gpio_mode_set(NULL, 0, map->gpio_txfault, MESA_GPIO_IN);
+            (void)mesa_gpio_mode_set(NULL, 0, map->gpio_los, MESA_GPIO_IN);
+            (void)mesa_gpio_mode_set(NULL, 0, map->gpio_sda, MESA_GPIO_IN);
+            (void)mesa_gpio_mode_set(NULL, 0, map->gpio_txdis, MESA_GPIO_OUT);
             /* Deassert TX_DISABLE by default */
-            (void)mesa_gpio_write(NULL, 0, pcb8398_sfp_gpio_map[p].gpio_txdis, 0);
+            (void)mesa_gpio_write(NULL, 0, map->gpio_txdis, 0);
         }
     }
 
@@ -484,7 +764,10 @@ static mesa_rc lan969x_sfp_i2c_xfer(meba_inst_t    inst,
     T_N(inst, "Called");
 
     if (board->type == BOARD_TYPE_LAGUNA_PCB8398 && pcb8398_sfp_gpio_has_port(inst, port_no)) {
-        i2c_port = pcb8398_sfp_i2c_port_get();
+        rc = pcb8398_sfp_i2c_xfer_gpio(inst, port_no, write, i2c_addr, addr, data, cnt);
+        T_D(inst, "i2c %s gpio-sfp port %d - address 0x%02x:0x%02x, %d bytes return %d",
+            write ? "write" : "read", port_no, i2c_addr, addr, cnt, rc);
+        return rc;
     }
 
     if (write) { // cnt ignored
@@ -627,10 +910,15 @@ static mesa_rc lan969x_port_admin_state_set(meba_inst_t                    inst,
         return rc;
     }
 
-    if (board->type == BOARD_TYPE_LAGUNA_PCB8398 && port_no < 30 &&
-        pcb8398_sfp_gpio_map[port_no].valid) {
+    if (board->type == BOARD_TYPE_LAGUNA_PCB8398) {
+        const sfp_gpio_map_t *map = pcb8398_sfp_gpio_map_get(inst, port_no);
+
+        if (map == NULL) {
+            return MESA_RC_OK;
+        }
+
         /* TX_DISABLE is active high on the direct GPIO wiring. */
-        (void)mesa_gpio_write(NULL, 0, pcb8398_sfp_gpio_map[port_no].gpio_txdis,
+        (void)mesa_gpio_write(NULL, 0, map->gpio_txdis,
                               state->enable ? FALSE : TRUE);
         return MESA_RC_OK;
     }
@@ -703,6 +991,10 @@ static mesa_rc lan969x_status_led_set(meba_inst_t      inst,
     meba_board_state_t *board = INST2BOARD(inst);
 
     if (board->type == BOARD_TYPE_SUNRISE) {
+        return MESA_RC_OK;
+    }
+
+    if (board->type == BOARD_TYPE_LAGUNA_PCB8398) {
         return MESA_RC_OK;
     }
 
@@ -863,17 +1155,14 @@ static mesa_rc lan969x_event_enable(meba_inst_t inst, meba_event_t event_id, mes
         if (board->type == BOARD_TYPE_LAGUNA_PCB8398 || board->type == BOARD_TYPE_LAGUNA_PCB8422) {
             if (board->type == BOARD_TYPE_LAGUNA_PCB8398) {
                 for (port_no = 0; port_no < board->port_cnt; port_no++) {
+                    const sfp_gpio_map_t *map = pcb8398_sfp_gpio_map_get(inst, port_no);
+
                     if (!pcb8398_sfp_gpio_has_port(inst, port_no)) {
                         continue;
                     }
-                    (void)mesa_gpio_event_enable(NULL, 0, pcb8398_sfp_gpio_map[port_no].gpio_los,
-                                                 enable);
-                    (void)mesa_gpio_event_enable(NULL, 0,
-                                                 pcb8398_sfp_gpio_map[port_no].gpio_txfault,
-                                                 enable);
-                    (void)mesa_gpio_event_enable(NULL, 0,
-                                                 pcb8398_sfp_gpio_map[port_no].gpio_moddet,
-                                                 enable);
+                    (void)mesa_gpio_event_enable(NULL, 0, map->gpio_los, enable);
+                    (void)mesa_gpio_event_enable(NULL, 0, map->gpio_txfault, enable);
+                    (void)mesa_gpio_event_enable(NULL, 0, map->gpio_moddet, enable);
                 }
                 break;
             }
@@ -1020,13 +1309,15 @@ static mesa_rc gpio_handler(meba_inst_t         inst,
 
         if (board->type == BOARD_TYPE_LAGUNA_PCB8398) {
             for (mesa_port_no_t p = 0; p < board->port_cnt; p++) {
+                const sfp_gpio_map_t *map = pcb8398_sfp_gpio_map_get(inst, p);
+
                 if (!pcb8398_sfp_gpio_has_port(inst, p)) {
                     continue;
                 }
 
-                if (gpio_events[pcb8398_sfp_gpio_map[p].gpio_los] ||
-                    gpio_events[pcb8398_sfp_gpio_map[p].gpio_txfault] ||
-                    gpio_events[pcb8398_sfp_gpio_map[p].gpio_moddet]) {
+                if (gpio_events[map->gpio_los] ||
+                    gpio_events[map->gpio_txfault] ||
+                    gpio_events[map->gpio_moddet]) {
                     signal_notifier(MEBA_EVENT_LOS, p);
                     handled++;
                 }
