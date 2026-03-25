@@ -635,20 +635,6 @@ static mesa_rc lan969x_sfp_i2c_xfer(meba_inst_t    inst,
     return rc;
 }
 
-static mesa_bool_t get_sfp_status(meba_inst_t             inst,
-                                  mesa_port_no_t          port_no,
-                                  mesa_sgpio_port_data_t *data,
-                                  sfp_signal_t            sfp)
-{
-    mesa_bool_t direct;
-
-    if (pcb8398_sfp_gpio_get(inst, port_no, sfp, &direct)) {
-        return direct;
-    }
-
-    return false;
-}
-
 // For backwards compatibility (use lan969x_sfp_status_get())
 static mesa_rc lan969x_sfp_insertion_status_get(meba_inst_t inst, mesa_port_list_t *present)
 {
