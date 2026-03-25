@@ -891,13 +891,17 @@ static mesa_rc lan969x_board_init(meba_inst_t inst)
     /* Configure GPIO 27 as recovered clock 0 */
     (void)mesa_gpio_mode_set(NULL, 0, 27, MESA_GPIO_ALT_0);
 
-    /* Configure GPIO 54 as recovered clock 1 */
-    (void)mesa_gpio_mode_set(NULL, 0, 54, MESA_GPIO_ALT_0);
+    /* Configure GPIO 54 as recovered clock 1 - skip on PCB8398 (used for SPI ADC clock) */
+    if (board->type != BOARD_TYPE_LAGUNA_PCB8398) {
+        (void)mesa_gpio_mode_set(NULL, 0, 54, MESA_GPIO_ALT_0);
+    }
 
-    /* Configure GPIO 57 as PTP.SYNC3 for the PHYs*/
-    mesa_ts_ext_io_mode_t pps_mode = {MESA_TS_EXT_IO_MODE_ONE_PPS_OUTPUT, 0, 0};
-    (void)mesa_gpio_mode_set(NULL, 0, 57, MESA_GPIO_ALT_3);
-    (void)mesa_ts_external_io_mode_set(NULL, 3, &pps_mode);
+    /* Configure GPIO 57 as PTP.SYNC3 for the PHYs - skip on PCB8398 (used for ADC CS0) */
+    if (board->type != BOARD_TYPE_LAGUNA_PCB8398) {
+        mesa_ts_ext_io_mode_t pps_mode = {MESA_TS_EXT_IO_MODE_ONE_PPS_OUTPUT, 0, 0};
+        (void)mesa_gpio_mode_set(NULL, 0, 57, MESA_GPIO_ALT_3);
+        (void)mesa_ts_external_io_mode_set(NULL, 3, &pps_mode);
+    }
 
     /* GPIOs for SGPIO Group 0 - only on eval boards, custom board uses these pins differently:
        GPIO 5 -> SoC function, GPIO 6 -> DC_FAN_DRV, GPIO 7 -> PHY_RESETn, GPIO 8 -> 1PPS_TO_SWITCH */
