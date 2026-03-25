@@ -63,8 +63,8 @@ static const uint32_t pin_conf_pcb8398[VTSS_TS_IO_ARRAY_SIZE] = {
     (MEBA_PTP_IO_CAP_UNUSED)};
 
 #define LAGUNA_CAP_SFP                                                                             \
-    (MEBA_PORT_CAP_SD_ENABLE | MEBA_PORT_CAP_SD_HIGH | MEBA_PORT_CAP_SFP_DETECT |                  \
-     MEBA_PORT_CAP_SFP_ONLY)
+    (MEBA_PORT_CAP_SD_ENABLE | MEBA_PORT_CAP_SD_HIGH | MEBA_PORT_CAP_SD_INTERNAL |                 \
+     MEBA_PORT_CAP_SFP_DETECT | MEBA_PORT_CAP_SFP_ONLY)
 #define LAGUNA_CAP_10G_FDX                                                                         \
     (MEBA_PORT_CAP_10G_FDX | MEBA_PORT_CAP_5G_FDX | MEBA_PORT_CAP_SFP_2_5G |                       \
      MEBA_PORT_CAP_FLOW_CTRL | LAGUNA_CAP_SFP)
@@ -552,6 +552,9 @@ static mesa_rc lan969x_board_init(meba_inst_t inst)
         (void)mesa_gpio_mode_set(NULL, 0, map->gpio_txdis, MESA_GPIO_OUT);
         /* Deassert TX_DISABLE by default */
         (void)mesa_gpio_write(NULL, 0, map->gpio_txdis, 0);
+        /* Assert rate select high for 10G SFP+ operation */
+        (void)mesa_gpio_mode_set(NULL, 0, map->gpio_rs, MESA_GPIO_OUT);
+        (void)mesa_gpio_write(NULL, 0, map->gpio_rs, 1);
     }
 
     return MESA_RC_OK;
