@@ -97,6 +97,12 @@ int fd_read_register(int fd, fd_read_callback_t callback, void *ref);
 void get_mac_addr(uint8_t *mac);
 void ip_mac_setup(mesa_vid_t vid, mesa_bool_t add);
 
+/* Direct I2C bus access (bypasses MEBA port mapping) */
+mesa_rc i2c_bus_reg_read(uint8_t bus, uint8_t i2c_addr, uint8_t reg, uint8_t *data, uint8_t cnt);
+mesa_rc i2c_bus_reg_write(uint8_t bus, uint8_t i2c_addr, uint8_t reg, uint8_t val);
+mesa_rc i2c_bus_raw_read(uint8_t bus, uint8_t i2c_addr, uint8_t *data, uint8_t cnt);
+mesa_rc i2c_bus_raw_write(uint8_t bus, uint8_t i2c_addr, const uint8_t *data, uint8_t cnt);
+
 #ifdef __cplusplus
 }
 #endif

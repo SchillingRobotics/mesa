@@ -181,6 +181,126 @@ static mesa_rc i2c_write(const mesa_port_no_t port_no,
     return rc;
 }
 
+/* ----------------------------------------------------------------- */
+/* Direct I2C bus access — bypasses MEBA port mapping                */
+/* ----------------------------------------------------------------- */
+
+mesa_rc i2c_bus_reg_read(uint8_t bus, uint8_t i2c_addr, uint8_t reg,
+                         uint8_t *data, uint8_t cnt)
+{
+    int     file;
+    mesa_rc rc = MESA_RC_ERROR;
+    uint8_t wbuf[257]; /* 0x77 + up to 256 register addresses */
+
+    if (cnt == 0 || cnt > 256)
+        return rc;
+
+    /* IM read protocol: write [0x77, reg, reg+1, ...], then read cnt bytes */
+    wbuf[0] = 0x77;
+    for (uint8_t i = 0; i < cnt; i++)
+        wbuf[1 + i] = reg + i;
+
+    if ((file = i2c_adapter_open(bus, i2c_addr)) >= 0) {
+        struct i2c_rdwr_ioctl_data packets;
+        struct i2c_msg             messages[2];
+
+        messages[0].addr  = i2c_addr;
+        messages[0].flags = 0;
+        messages[0].len   = 1 + cnt;
+        messages[0].buf   = wbuf;
+
+        messages[1].addr  = i2c_addr;
+        messages[1].flags = I2C_M_RD;
+        messages[1].len   = cnt;
+        messages[1].buf   = data;
+
+        packets.msgs  = messages;
+        packets.nmsgs = ARRSZ(messages);
+        if (ioctl(file, I2C_RDWR, &packets) >= 0) {
+            rc = MESA_RC_OK;
+        }
+        close(file);
+    }
+    return rc;
+}
+
+mesa_rc i2c_bus_reg_write(uint8_t bus, uint8_t i2c_addr, uint8_t reg,
+                          uint8_t val)
+{
+    int     file;
+    mesa_rc rc = MESA_RC_ERROR;
+
+    if ((file = i2c_adapter_open(bus, i2c_addr)) >= 0) {
+        struct i2c_rdwr_ioctl_data packets;
+        struct i2c_msg             messages[1];
+        /* IM write protocol: [0x72, reg, val] */
+        uint8_t                    buf[3] = {0x72, reg, val};
+
+        messages[0].addr  = i2c_addr;
+        messages[0].flags = 0;
+        messages[0].len   = 3;
+        messages[0].buf   = buf;
+
+        packets.msgs  = messages;
+        packets.nmsgs = ARRSZ(messages);
+        if (ioctl(file, I2C_RDWR, &packets) >= 0) {
+            rc = MESA_RC_OK;
+        }
+        close(file);
+    }
+    return rc;
+}
+
+mesa_rc i2c_bus_raw_read(uint8_t bus, uint8_t i2c_addr, uint8_t *data,
+                         uint8_t cnt)
+{
+    int     file;
+    mesa_rc rc = MESA_RC_ERROR;
+
+    if ((file = i2c_adapter_open(bus, i2c_addr)) >= 0) {
+        struct i2c_rdwr_ioctl_data packets;
+        struct i2c_msg             messages[1];
+
+        messages[0].addr  = i2c_addr;
+        messages[0].flags = I2C_M_RD;
+        messages[0].len   = cnt;
+        messages[0].buf   = data;
+
+        packets.msgs  = messages;
+        packets.nmsgs = 1;
+        if (ioctl(file, I2C_RDWR, &packets) >= 0) {
+            rc = MESA_RC_OK;
+        }
+        close(file);
+    }
+    return rc;
+}
+
+mesa_rc i2c_bus_raw_write(uint8_t bus, uint8_t i2c_addr, const uint8_t *data,
+                          uint8_t cnt)
+{
+    int     file;
+    mesa_rc rc = MESA_RC_ERROR;
+
+    if ((file = i2c_adapter_open(bus, i2c_addr)) >= 0) {
+        struct i2c_rdwr_ioctl_data packets;
+        struct i2c_msg             messages[1];
+
+        messages[0].addr  = i2c_addr;
+        messages[0].flags = 0;
+        messages[0].len   = cnt;
+        messages[0].buf   = (uint8_t *)data;
+
+        packets.msgs  = messages;
+        packets.nmsgs = 1;
+        if (ioctl(file, I2C_RDWR, &packets) >= 0) {
+            rc = MESA_RC_OK;
+        }
+        close(file);
+    }
+    return rc;
+}
+
 static mesa_bool_t int_from_str(const char *s, int *res)
 {
     long int tmp;
