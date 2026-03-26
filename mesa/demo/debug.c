@@ -53,6 +53,7 @@ typedef struct {
     mesa_bool_t has_dfe;
     mesa_bool_t has_ctle;
     mesa_bool_t has_txeq;
+    uint8_t     sfp_addr; /* 0x50 or 0x51 for SFP ports */
 
     char pattern[CLI_PATTERN_MAX + 1];
 } debug_cli_req_t;
@@ -282,13 +283,14 @@ static void cli_cmd_debug_i2c(cli_req_t *req, mesa_bool_t write)
         }
 
         if (is_sfp) {
-            /* SFP port: use MEBA sfp_i2c_xfer (standard I2C) */
+            /* SFP port: use sfp_addr (0x50 default, or 0x51 if specified) */
+            uint8_t sfp_addr = mreq->sfp_addr ? mreq->sfp_addr : 0x50;
             if (write) {
-                if (req->inst->api.meba_sfp_i2c_xfer(req->inst, iport, 1, mreq->i2c_addr,
+                if (req->inst->api.meba_sfp_i2c_xfer(req->inst, iport, 1, sfp_addr,
                                                      mreq->i2c_reg, &mreq->i2c_value, 1, 0) != MESA_RC_OK) {
                     cli_printf("I2C write failed for port %u\n", port);
                 }
-            } else if (req->inst->api.meba_sfp_i2c_xfer(req->inst, iport, 0, mreq->i2c_addr,
+            } else if (req->inst->api.meba_sfp_i2c_xfer(req->inst, iport, 0, sfp_addr,
                                                         mreq->i2c_reg, buf, count, 0) != MESA_RC_OK) {
                 cli_printf("I2C read failed for port %u\n", port);
             } else {
@@ -302,13 +304,14 @@ static void cli_cmd_debug_i2c(cli_req_t *req, mesa_bool_t write)
                 }
             }
         } else {
-            /* Copper/IM port: use IM protocol (0x77 read / 0x72 write) on bus 0 */
+            /* Copper/IM port: I2C address is 0x21 + (port - 1) */
+            uint8_t im_addr = 0x20 + port;
             if (write) {
-                if (i2c_bus_reg_write(0, mreq->i2c_addr, mreq->i2c_reg, mreq->i2c_value) != MESA_RC_OK) {
-                    cli_printf("I2C write failed for port %u\n", port);
+                if (i2c_bus_reg_write(0, im_addr, mreq->i2c_reg, mreq->i2c_value) != MESA_RC_OK) {
+                    cli_printf("I2C write failed for port %u (addr 0x%02x)\n", port, im_addr);
                 }
-            } else if (i2c_bus_reg_read(0, mreq->i2c_addr, mreq->i2c_reg, buf, count) != MESA_RC_OK) {
-                cli_printf("I2C read failed for port %u\n", port);
+            } else if (i2c_bus_reg_read(0, im_addr, mreq->i2c_reg, buf, count) != MESA_RC_OK) {
+                cli_printf("I2C read failed for port %u (addr 0x%02x)\n", port, im_addr);
             } else {
                 if (first) {
                     first = 0;
@@ -442,9 +445,9 @@ static cli_cmd_t cli_cmd_table[] = {
      cli_cmd_debug_mmd_read, CLI_CMD_FLAG_ALL_PORTS},
     {"Debug MMD Write <port_list> <mmd_list> <mmd_addr> <value>", "Write MMD register",
      cli_cmd_debug_mmd_write, CLI_CMD_FLAG_ALL_PORTS},
-    {"Debug I2C Read <port_list> <i2c_addr> <addr> [<count>]", "Read I2C register",
+    {"Debug I2C Read <port_list> [0x50|0x51] <addr> [<count>]", "Read I2C (SFP: 0x50 or 0x51, IM: auto-addr)",
      cli_cmd_debug_i2c_read, CLI_CMD_FLAG_ALL_PORTS},
-    {"Debug I2C Write <port_list> <i2c_addr> <addr> <value>", "Write I2C register",
+    {"Debug I2C Write <port_list> [0x50|0x51] <addr> <value>", "Write I2C (SFP: 0x50 or 0x51, IM: auto-addr)",
      cli_cmd_debug_i2c_write, CLI_CMD_FLAG_ALL_PORTS},
     {"Debug I2C Bus Read <bus> <i2c_addr>", "Raw byte read from I2C device",
      cli_cmd_debug_i2c_bus_read},
@@ -602,6 +605,20 @@ static int cli_parm_i2c_bus(cli_req_t *req)
     return cli_parm_u8(req, &mreq->i2c_bus, 0, 0xff);
 }
 
+static int cli_parm_sfp_addr(cli_req_t *req)
+{
+    debug_cli_req_t *mreq = req->module_req;
+
+    if (!strncmp(req->cmd, "0x51", 4)) {
+        mreq->sfp_addr = 0x51;
+        return 0;
+    } else if (!strncmp(req->cmd, "0x50", 4)) {
+        mreq->sfp_addr = 0x50;
+        return 0;
+    }
+    return 1;
+}
+
 static int cli_parm_reg_pattern(cli_req_t *req)
 {
     size_t           cnt = 0;
@@ -687,6 +704,8 @@ static cli_parm_t cli_parm_table[] = {
      CLI_PARM_FLAG_NONE, cli_parm_keyword},
     {"txeq", "Tx equalization: deb serdes <port> txeq dly,adv,ampl", CLI_PARM_FLAG_NONE,
      cli_parm_keyword},
+    {"0x50|0x51", "SFP I2C address: 0x50 (A0, default) or 0x51 (A2/DOM)", CLI_PARM_FLAG_NONE,
+     cli_parm_sfp_addr},
     {"<addr16>", "16-bit address (0-65535)", CLI_PARM_FLAG_NONE, cli_parm_addr_16bit},
 };
 
