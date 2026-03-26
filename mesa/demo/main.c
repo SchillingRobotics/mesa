@@ -216,29 +216,42 @@ mesa_rc i2c_bus_reg_read(uint8_t bus, uint8_t i2c_addr, uint8_t reg,
     if (cnt == 0 || cnt > 256)
         return rc;
 
-    /* IM read protocol: write [0x77, reg, reg+1, ...], then read cnt bytes */
+    /* IM read protocol (two separate transactions with delay):
+     *   1) Write [0x77, reg, reg+1, ...] — STOP
+     *   2) Delay 200us for IM to prepare response
+     *   3) Read cnt bytes — separate START/STOP
+     */
     wbuf[0] = 0x77;
     for (uint8_t i = 0; i < cnt; i++)
         wbuf[1 + i] = reg + i;
 
     if ((file = i2c_adapter_open(bus, i2c_addr)) >= 0) {
         struct i2c_rdwr_ioctl_data packets;
-        struct i2c_msg             messages[2];
+        struct i2c_msg             msg;
 
-        messages[0].addr  = i2c_addr;
-        messages[0].flags = 0;
-        messages[0].len   = 1 + cnt;
-        messages[0].buf   = wbuf;
+        /* Transaction 1: write command + register addresses */
+        msg.addr  = i2c_addr;
+        msg.flags = 0;
+        msg.len   = 1 + cnt;
+        msg.buf   = wbuf;
 
-        messages[1].addr  = i2c_addr;
-        messages[1].flags = I2C_M_RD;
-        messages[1].len   = cnt;
-        messages[1].buf   = data;
-
-        packets.msgs  = messages;
-        packets.nmsgs = ARRSZ(messages);
+        packets.msgs  = &msg;
+        packets.nmsgs = 1;
         if (ioctl(file, I2C_RDWR, &packets) >= 0) {
-            rc = MESA_RC_OK;
+            /* Delay for IM to process the request */
+            usleep(200);
+
+            /* Transaction 2: read response */
+            msg.addr  = i2c_addr;
+            msg.flags = I2C_M_RD;
+            msg.len   = cnt;
+            msg.buf   = data;
+
+            packets.msgs  = &msg;
+            packets.nmsgs = 1;
+            if (ioctl(file, I2C_RDWR, &packets) >= 0) {
+                rc = MESA_RC_OK;
+            }
         }
         close(file);
     }
