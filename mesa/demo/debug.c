@@ -42,6 +42,7 @@ typedef struct {
     uint8_t     i2c_reg;
     uint8_t     i2c_value;
     uint8_t     i2c_count;
+    uint8_t     i2c_bus;
 
     mesa_debug_layer_t layer;
     mesa_debug_group_t group;
@@ -253,42 +254,99 @@ static void cli_cmd_debug_mmd_read(cli_req_t *req) { cli_cmd_debug_mmd(req, 0); 
 
 static void cli_cmd_debug_mmd_write(cli_req_t *req) { cli_cmd_debug_mmd(req, 1); }
 
-static void cli_cmd_debug_i2c(cli_req_t *req)
+static void cli_cmd_debug_i2c(cli_req_t *req, mesa_bool_t write)
 {
-    mesa_port_no_t   iport, port;
-    debug_cli_req_t *mreq = req->module_req;
-    uint8_t          i, count, first = 1, buf[256];
+    mesa_port_no_t    iport, port;
+    debug_cli_req_t  *mreq = req->module_req;
+    meba_port_entry_t entry;
+    uint8_t           i, count, first = 1, buf[256];
+    mesa_bool_t       is_sfp;
 
     count = mreq->i2c_count;
     if (count == 0) {
         count = 1;
     }
     if (mreq->i2c_reg + count > 255) {
-        count = (255 - mreq->i2c_reg);
+        count = (256 - mreq->i2c_reg);
     }
     for (iport = 0; iport < mesa_port_cnt(NULL); iport++) {
         port = iport2uport(iport);
         if (req->port_list[port] == 0) {
             continue;
         }
-        if (req->set) {
-            if (req->inst->api.meba_sfp_i2c_xfer(req->inst, iport, 1, mreq->i2c_addr, mreq->i2c_reg,
-                                                 &mreq->i2c_value, 1, 0) != MESA_RC_OK) {
-                cli_printf("I2C write failed for port %u\n", port);
+
+        /* Detect SFP vs copper/IM port */
+        is_sfp = 0;
+        if (req->inst->api.meba_port_entry_get(req->inst, iport, &entry) == MESA_RC_OK) {
+            is_sfp = (entry.cap & MEBA_PORT_CAP_SFP_DETECT) ? 1 : 0;
+        }
+
+        if (is_sfp) {
+            /* SFP port: use MEBA sfp_i2c_xfer (standard I2C) */
+            if (write) {
+                if (req->inst->api.meba_sfp_i2c_xfer(req->inst, iport, 1, mreq->i2c_addr,
+                                                     mreq->i2c_reg, &mreq->i2c_value, 1, 0) != MESA_RC_OK) {
+                    cli_printf("I2C write failed for port %u\n", port);
+                }
+            } else if (req->inst->api.meba_sfp_i2c_xfer(req->inst, iport, 0, mreq->i2c_addr,
+                                                        mreq->i2c_reg, buf, count, 0) != MESA_RC_OK) {
+                cli_printf("I2C read failed for port %u\n", port);
+            } else {
+                if (first) {
+                    first = 0;
+                    cli_table_header("Port  Addr  Value");
+                }
+                for (i = 0; i < count; i++) {
+                    cli_printf("%-6u%-6u0x%02x %c\n", port, mreq->i2c_reg + i, buf[i],
+                               isprint(buf[i]) ? buf[i] : '.');
+                }
             }
-        } else if (req->inst->api.meba_sfp_i2c_xfer(req->inst, iport, 0, mreq->i2c_addr,
-                                                    mreq->i2c_reg, buf, count, 0) != MESA_RC_OK) {
-            cli_printf("I2C read failed for port %u\n", port);
         } else {
-            if (first) {
-                first = 0;
-                cli_table_header("Port  Addr  Value");
-            }
-            for (i = 0; i < count; i++) {
-                cli_printf("%-6u%-6u0x%02x %c\n", port, mreq->i2c_reg + i, buf[i],
-                           isprint(buf[i]) ? buf[i] : '.');
+            /* Copper/IM port: use IM protocol (0x77 read / 0x72 write) on bus 0 */
+            if (write) {
+                if (i2c_bus_reg_write(0, mreq->i2c_addr, mreq->i2c_reg, mreq->i2c_value) != MESA_RC_OK) {
+                    cli_printf("I2C write failed for port %u\n", port);
+                }
+            } else if (i2c_bus_reg_read(0, mreq->i2c_addr, mreq->i2c_reg, buf, count) != MESA_RC_OK) {
+                cli_printf("I2C read failed for port %u\n", port);
+            } else {
+                if (first) {
+                    first = 0;
+                    cli_table_header("Port  Addr  Value");
+                }
+                for (i = 0; i < count; i++) {
+                    cli_printf("%-6u%-6u0x%02x %c\n", port, mreq->i2c_reg + i, buf[i],
+                               isprint(buf[i]) ? buf[i] : '.');
+                }
             }
         }
+    }
+}
+
+static void cli_cmd_debug_i2c_read(cli_req_t *req) { cli_cmd_debug_i2c(req, 0); }
+
+static void cli_cmd_debug_i2c_write(cli_req_t *req) { cli_cmd_debug_i2c(req, 1); }
+
+/* Direct I2C bus commands — raw byte access (e.g. for I2C mux) */
+
+static void cli_cmd_debug_i2c_bus_read(cli_req_t *req)
+{
+    debug_cli_req_t *mreq = req->module_req;
+    uint8_t          val;
+
+    if (i2c_bus_raw_read(mreq->i2c_bus, mreq->i2c_addr, &val, 1) == MESA_RC_OK) {
+        cli_printf("0x%02x\n", val);
+    } else {
+        cli_printf("I2C raw read failed on bus %u, addr 0x%02x\n", mreq->i2c_bus, mreq->i2c_addr);
+    }
+}
+
+static void cli_cmd_debug_i2c_bus_write(cli_req_t *req)
+{
+    debug_cli_req_t *mreq = req->module_req;
+
+    if (i2c_bus_raw_write(mreq->i2c_bus, mreq->i2c_addr, &mreq->i2c_value, 1) != MESA_RC_OK) {
+        cli_printf("I2C raw write failed on bus %u, addr 0x%02x\n", mreq->i2c_bus, mreq->i2c_addr);
     }
 }
 
@@ -385,9 +443,13 @@ static cli_cmd_t cli_cmd_table[] = {
     {"Debug MMD Write <port_list> <mmd_list> <mmd_addr> <value>", "Write MMD register",
      cli_cmd_debug_mmd_write, CLI_CMD_FLAG_ALL_PORTS},
     {"Debug I2C Read <port_list> <i2c_addr> <addr> [<count>]", "Read I2C register",
-     cli_cmd_debug_i2c, CLI_CMD_FLAG_ALL_PORTS},
+     cli_cmd_debug_i2c_read, CLI_CMD_FLAG_ALL_PORTS},
     {"Debug I2C Write <port_list> <i2c_addr> <addr> <value>", "Write I2C register",
-     cli_cmd_debug_i2c, CLI_CMD_FLAG_ALL_PORTS},
+     cli_cmd_debug_i2c_write, CLI_CMD_FLAG_ALL_PORTS},
+    {"Debug I2C Bus Read <bus> <i2c_addr>", "Raw byte read from I2C device",
+     cli_cmd_debug_i2c_bus_read},
+    {"Debug I2C Bus Write <bus> <i2c_addr> <value>", "Raw byte write to I2C device",
+     cli_cmd_debug_i2c_bus_write},
     {"Debug Chip ID", "Read chip ID", cli_cmd_debug_chip_id},
     {"Debug Sym Read <word128>", "Read one/many switch register(s)", cli_cmd_debug_symreg_read},
     {"Debug Sym Write <word128> <value32>", "Write one/many switch register(s)",
@@ -534,6 +596,12 @@ static int cli_parm_i2c_count(cli_req_t *req)
     return cli_parm_u8(req, &mreq->i2c_count, 1, 0xff);
 }
 
+static int cli_parm_i2c_bus(cli_req_t *req)
+{
+    debug_cli_req_t *mreq = req->module_req;
+    return cli_parm_u8(req, &mreq->i2c_bus, 0, 0xff);
+}
+
 static int cli_parm_reg_pattern(cli_req_t *req)
 {
     size_t           cnt = 0;
@@ -592,11 +660,14 @@ static cli_parm_t cli_parm_table[] = {
     {"<i2c_addr>", "I2C address (0-255)", CLI_PARM_FLAG_NONE, cli_parm_i2c_addr},
     {"<addr>", "I2C register (0-255)", CLI_PARM_FLAG_NONE, cli_parm_i2c_reg},
     {"<value>", "I2C register value (0-255)", CLI_PARM_FLAG_SET, cli_parm_i2c_value,
-     cli_cmd_debug_i2c},
+     cli_cmd_debug_i2c_write},
+    {"<value>", "Byte value (0-255)", CLI_PARM_FLAG_SET, cli_parm_i2c_value,
+     cli_cmd_debug_i2c_bus_write},
     {
      "<count>", "Number of I2C registers (1-255)",
-     CLI_PARM_FLAG_NONE, cli_parm_i2c_count,
+     CLI_PARM_FLAG_NONE, cli_parm_i2c_count, cli_cmd_debug_i2c_read
      },
+    {"<bus>", "Linux I2C bus number (0-255)", CLI_PARM_FLAG_NONE, cli_parm_i2c_bus},
     {"<word128>", "Register pattern on the form 'target[t]:reggrp[g]:reg[r]', where\n\
         'target' is the name of the target (e.g. dev).\n\
         'reggrp' is the name of the register group.\n\
