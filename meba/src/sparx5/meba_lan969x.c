@@ -310,7 +310,7 @@ static mesa_rc lan969x_port_power_set(meba_inst_t inst, mesa_port_no_t port_no, 
     }
 
     if (port_no >= PORT_POWER_COUNT) {
-        return MESA_RC_OK;
+        return MESA_RC_OK;  /* SFP/non-copper ports: silently ignore */
     }
 
     /* Determine which IIO device: ports 0-7 → device[0], ports 8-15 → device[1] */
@@ -368,7 +368,7 @@ static mesa_rc lan969x_port_power_get(meba_inst_t inst, mesa_port_no_t port_no, 
 
     if (port_no >= PORT_POWER_COUNT) {
         *enabled = FALSE;
-        return MESA_RC_OK;
+        return MESA_RC_ERROR;  /* SFP/non-copper ports have no port power */
     }
 
     int dev_idx = port_no / 8;
