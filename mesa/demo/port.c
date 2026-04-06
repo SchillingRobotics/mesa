@@ -1364,7 +1364,7 @@ static void cli_cmd_phy_dump(cli_req_t *req)
     }
 }
 
-/* Port Power Control - Control 24V power to ethernet ports via 74HC595 shift registers */
+/* Port Power Control - Control 24V power to ethernet ports via ad7949 IIO driver */
 static void cli_cmd_port_power(cli_req_t *req)
 {
     mesa_port_no_t uport, iport;

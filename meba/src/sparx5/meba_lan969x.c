@@ -151,136 +151,67 @@ static mesa_bool_t pcb8398_sfp_gpio_has_port(meba_inst_t inst, mesa_port_no_t po
 }
 
 /* ============================================================================
- * Port Power Control via 74HC595 shift registers (Linux gpiolib sysfs)
+ * Port Power Control via ad7949 IIO driver sysfs (kernel owns 74HC595 GPIOs)
  *
- * The 74HC595 GPIO expander is exposed as a gpiochip in /sys/class/gpio/.
- * We find its base GPIO number by scanning for label "74hc595", then access
- * individual port power GPIOs via sysfs.
+ * The ad7949 kernel driver claims the 74HC595 GPIOs via trip-gpios for fast
+ * fuse tripping.  Userspace controls port power through the driver's
+ * "port_power" sysfs attribute (a hex bitmask, 1 = ON, 0 = OFF).
+ *
+ * Two IIO devices carry GPIOs:
+ *   iio:deviceX  (adc@0)  →  ports 0-7   (trip-gpios 0..7)
+ *   iio:deviceY  (adc@1)  →  ports 8-15  (trip-gpios 0..7)
+ *
+ * Discovery: scan /sys/bus/iio/devices/iio:device* for a readable
+ * "port_power" file.  The order they are found maps to [0-7] then [8-15].
  * ============================================================================
  */
 
-/**
- * Find the base GPIO number of the 74HC595 gpiochip.
- * Returns the base number, or -1 if not found.
- */
-static int pcb8398_port_power_find_gpiochip(meba_inst_t inst)
-{
-    DIR           *dp;
-    struct dirent *ep;
-    int            base = -1;
+/* Maximum number of IIO devices that carry port_power (adc@0, adc@1) */
+#define PORT_POWER_IIO_MAX 2
 
-    dp = opendir("/sys/class/gpio/");
-    if (dp == NULL) {
-        T_I(inst, "Cannot open /sys/class/gpio/");
+/**
+ * Read the port_power bitmask from one IIO sysfs path.
+ * Returns the mask (0x00-0xFF), or -1 on failure.
+ */
+static int pcb8398_iio_port_power_read(meba_inst_t inst, const char *iio_path)
+{
+    char path[256];
+    snprintf(path, sizeof(path), "%s/port_power", iio_path);
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        T_E(inst, "Cannot open %s", path);
         return -1;
     }
 
-    while ((ep = readdir(dp)) != NULL) {
-        if (strncmp(ep->d_name, "gpiochip", 8) != 0) {
-            continue;
-        }
-
-        char label_path[512];
-        snprintf(label_path, sizeof(label_path), "/sys/class/gpio/%s/label", ep->d_name);
-
-        int fd = open(label_path, O_RDONLY);
-        if (fd < 0) {
-            continue;
-        }
-
-        char label[64] = {0};
-        ssize_t n = read(fd, label, sizeof(label) - 1);
-        close(fd);
-
-        if (n <= 0) {
-            continue;
-        }
-
-        /* Remove trailing newline */
-        if (n > 0 && label[n - 1] == '\n') {
-            label[n - 1] = '\0';
-        }
-
-        if (strstr(label, "74hc595") != NULL || strstr(label, "74x164") != NULL) {
-            /* Found it - read base number */
-            char base_path[512];
-            snprintf(base_path, sizeof(base_path), "/sys/class/gpio/%s/base", ep->d_name);
-
-            fd = open(base_path, O_RDONLY);
-            if (fd >= 0) {
-                char buf[32] = {0};
-                if (read(fd, buf, sizeof(buf) - 1) > 0) {
-                    base = atoi(buf);
-                }
-                close(fd);
-            }
-            T_I(inst, "Found 74HC595 port power gpiochip: %s, base=%d", ep->d_name, base);
-            break;
-        }
-    }
-
-    closedir(dp);
-    return base;
-}
-
-/**
- * Export a GPIO to sysfs if not already exported.
- */
-static mesa_bool_t pcb8398_port_power_gpio_export(meba_inst_t inst, int gpio_num)
-{
-    char gpio_path[64];
-    snprintf(gpio_path, sizeof(gpio_path), "/sys/class/gpio/gpio%d", gpio_num);
-
-    /* Check if already exported */
-    if (access(gpio_path, F_OK) == 0) {
-        return TRUE;
-    }
-
-    /* Export it */
-    int fd = open("/sys/class/gpio/export", O_WRONLY);
-    if (fd < 0) {
-        T_E(inst, "Cannot open /sys/class/gpio/export");
-        return FALSE;
-    }
-
-    char buf[16];
-    int len = snprintf(buf, sizeof(buf), "%d", gpio_num);
-    ssize_t written = write(fd, buf, len);
+    char buf[16] = {0};
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
 
-    if (written != len) {
-        T_E(inst, "Failed to export GPIO %d", gpio_num);
-        return FALSE;
+    if (n <= 0) {
+        T_E(inst, "Failed to read %s", path);
+        return -1;
     }
 
-    /* Brief delay for sysfs to create the node */
-    usleep(10000);
-
-    /* Set direction to output (if direction file exists).
-     * Output-only expanders like 74HC595 may not have a direction file
-     * since they are inherently output-only. */
-    snprintf(gpio_path, sizeof(gpio_path), "/sys/class/gpio/gpio%d/direction", gpio_num);
-    fd = open(gpio_path, O_WRONLY);
-    if (fd >= 0) {
-        written = write(fd, "out", 3);
-        close(fd);
-        if (written != 3) {
-            T_E(inst, "Failed to set GPIO %d direction", gpio_num);
-            return FALSE;
-        }
+    unsigned int val = 0;
+    if (sscanf(buf, "%x", &val) != 1 && sscanf(buf, "0x%x", &val) != 1) {
+        T_E(inst, "Cannot parse port_power value '%s'", buf);
+        return -1;
     }
-    /* If direction file doesn't exist, that's OK for output-only expanders */
 
-    return TRUE;
+    return (int)(val & 0xFF);
 }
 
 /**
- * Set a port power GPIO value.
+ * Write the port_power bitmask to one IIO sysfs path.
+ * Returns TRUE on success.
  */
-static mesa_bool_t pcb8398_port_power_gpio_set(meba_inst_t inst, int gpio_num, mesa_bool_t value)
+static mesa_bool_t pcb8398_iio_port_power_write(meba_inst_t inst,
+                                                  const char *iio_path,
+                                                  uint8_t     mask)
 {
-    char path[64];
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", gpio_num);
+    char path[256];
+    snprintf(path, sizeof(path), "%s/port_power", iio_path);
 
     int fd = open(path, O_WRONLY);
     if (fd < 0) {
@@ -288,119 +219,140 @@ static mesa_bool_t pcb8398_port_power_gpio_set(meba_inst_t inst, int gpio_num, m
         return FALSE;
     }
 
-    const char *val_str = value ? "1" : "0";
-    ssize_t written = write(fd, val_str, 1);
+    char buf[16];
+    int len = snprintf(buf, sizeof(buf), "0x%02x\n", mask);
+    ssize_t written = write(fd, buf, len);
     close(fd);
 
-    T_D(inst, "GPIO %d: wrote '%s', result=%zd", gpio_num, val_str, written);
-    return (written == 1);
-}
-
-/**
- * Read a port power GPIO value.
- */
-static mesa_bool_t pcb8398_port_power_gpio_get(meba_inst_t inst, int gpio_num, mesa_bool_t *value)
-{
-    char path[64];
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", gpio_num);
-
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        T_E(inst, "Cannot open %s for reading", path);
+    if (written != len) {
+        T_E(inst, "Failed to write 0x%02x to %s", mask, path);
         return FALSE;
     }
 
-    char buf[4] = {0};
-    ssize_t bytes_read = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-
-    if (bytes_read <= 0) {
-        T_E(inst, "Failed to read GPIO %d value", gpio_num);
-        return FALSE;
-    }
-
-    *value = (buf[0] == '1') ? TRUE : FALSE;
-    T_D(inst, "GPIO %d: read '%c' -> %s", gpio_num, buf[0], *value ? "ON" : "OFF");
     return TRUE;
 }
 
 /**
- * Initialize port power control: find gpiochip and export all GPIOs.
+ * Discover IIO devices that expose "port_power" and store their sysfs paths.
  */
 static void pcb8398_port_power_init(meba_inst_t inst)
 {
     meba_board_state_t *board = INST2BOARD(inst);
+    DIR           *dp;
+    struct dirent *ep;
 
-    board->port_power_gpio_base = -1;
+    board->port_power_iio_count = 0;
     board->port_power_state = 0;
+    memset(board->port_power_iio_path, 0, sizeof(board->port_power_iio_path));
 
-    int base = pcb8398_port_power_find_gpiochip(inst);
-    if (base < 0) {
-        T_I(inst, "74HC595 port power gpiochip not found - power control unavailable");
+    dp = opendir("/sys/bus/iio/devices/");
+    if (dp == NULL) {
+        T_I(inst, "Cannot open /sys/bus/iio/devices/ - port power unavailable");
         return;
     }
 
-    board->port_power_gpio_base = base;
-
-    /* Export all 16 GPIOs and set initial state to OFF */
-    for (int i = 0; i < PORT_POWER_COUNT; i++) {
-        if (!pcb8398_port_power_gpio_export(inst, base + i)) {
-            T_E(inst, "Failed to export port power GPIO %d", i);
+    while ((ep = readdir(dp)) != NULL) {
+        if (strncmp(ep->d_name, "iio:device", 10) != 0) {
+            continue;
         }
-        /* Set initial state to OFF */
-        pcb8398_port_power_gpio_set(inst, base + i, FALSE);
+        if (board->port_power_iio_count >= PORT_POWER_IIO_MAX) {
+            break;
+        }
+
+        char pp_path[256];
+        snprintf(pp_path, sizeof(pp_path),
+                 "/sys/bus/iio/devices/%s/port_power", ep->d_name);
+
+        if (access(pp_path, R_OK | W_OK) != 0) {
+            continue;
+        }
+
+        /* Found one - store the base IIO device path */
+        snprintf(board->port_power_iio_path[board->port_power_iio_count],
+                 sizeof(board->port_power_iio_path[0]),
+                 "/sys/bus/iio/devices/%s", ep->d_name);
+
+        T_I(inst, "Port power IIO device[%d]: %s",
+            board->port_power_iio_count,
+            board->port_power_iio_path[board->port_power_iio_count]);
+
+        board->port_power_iio_count++;
     }
 
-    T_I(inst, "Port power control initialized with gpio base %d", base);
+    closedir(dp);
+
+    if (board->port_power_iio_count == 0) {
+        T_I(inst, "No IIO devices with port_power found - power control unavailable");
+        return;
+    }
+
+    /* Read initial state from each device */
+    for (int i = 0; i < board->port_power_iio_count; i++) {
+        int mask = pcb8398_iio_port_power_read(inst, board->port_power_iio_path[i]);
+        if (mask >= 0) {
+            board->port_power_state |= ((uint16_t)mask << (i * 8));
+        }
+    }
+
+    T_I(inst, "Port power control initialized: %d IIO device(s), state=0x%04x",
+        board->port_power_iio_count, board->port_power_state);
 }
 
 /**
  * Set port power state (MEBA API wrapper).
- * port_no: logical port number (0-15 for port power control)
- * enable: TRUE to enable 24V power, FALSE to disable
- * Returns: MESA_RC_OK on success,
- *          MESA_RC_NOT_IMPLEMENTED if port power control not available,
- *          MESA_RC_ERROR on failure.
  */
 static mesa_rc lan969x_port_power_set(meba_inst_t inst, mesa_port_no_t port_no, mesa_bool_t enable)
 {
     meba_board_state_t *board = INST2BOARD(inst);
 
-    if (board->port_power_gpio_base < 0) {
-        /* Port power control not available (74HC595 gpiochip not found) */
+    if (board->port_power_iio_count == 0) {
         return MESA_RC_NOT_IMPLEMENTED;
     }
 
-    /* Only the first 16 ports have power control */
     if (port_no >= PORT_POWER_COUNT) {
-        return MESA_RC_OK;  /* Not an error, just no power control for this port */
+        return MESA_RC_OK;
     }
 
-    int gpio_num = board->port_power_gpio_base + port_no;
+    /* Determine which IIO device: ports 0-7 → device[0], ports 8-15 → device[1] */
+    int dev_idx = port_no / 8;
+    int bit     = port_no % 8;
 
-    if (!pcb8398_port_power_gpio_set(inst, gpio_num, enable)) {
+    if (dev_idx >= board->port_power_iio_count) {
+        T_E(inst, "Port %u maps to IIO device[%d] but only %d available",
+            port_no, dev_idx, board->port_power_iio_count);
+        return MESA_RC_ERROR;
+    }
+
+    /* Read current mask for this device from cached state */
+    uint8_t cur_mask = (board->port_power_state >> (dev_idx * 8)) & 0xFF;
+    uint8_t new_mask;
+
+    if (enable) {
+        new_mask = cur_mask | (1U << bit);
+    } else {
+        new_mask = cur_mask & ~(1U << bit);
+    }
+
+    if (new_mask == cur_mask) {
+        return MESA_RC_OK; /* Already in desired state */
+    }
+
+    if (!pcb8398_iio_port_power_write(inst, board->port_power_iio_path[dev_idx], new_mask)) {
         T_E(inst, "Failed to set port %u power to %s", port_no, enable ? "ON" : "OFF");
         return MESA_RC_ERROR;
     }
 
-    /* Update state tracking */
-    if (enable) {
-        board->port_power_state |= (1U << port_no);
-    } else {
-        board->port_power_state &= ~(1U << port_no);
-    }
+    /* Update cached state */
+    board->port_power_state = (board->port_power_state & ~(0xFFU << (dev_idx * 8)))
+                            | ((uint16_t)new_mask << (dev_idx * 8));
 
-    T_I(inst, "Port %u power %s (gpio %d)", port_no, enable ? "ON" : "OFF", gpio_num);
+    T_I(inst, "Port %u power %s (iio dev[%d] mask=0x%02x)",
+        port_no, enable ? "ON" : "OFF", dev_idx, new_mask);
     return MESA_RC_OK;
 }
 
 /**
  * Get port power state (MEBA API).
- * port_no: logical port number (0-15 for port power control)
- * enabled: [OUT] current power state
- * Returns: MESA_RC_OK on success,
- *          MESA_RC_NOT_IMPLEMENTED if port power control not available,
- *          MESA_RC_ERROR on failure.
  */
 static mesa_rc lan969x_port_power_get(meba_inst_t inst, mesa_port_no_t port_no, mesa_bool_t *enabled)
 {
@@ -410,21 +362,31 @@ static mesa_rc lan969x_port_power_get(meba_inst_t inst, mesa_port_no_t port_no, 
         return MESA_RC_ERROR;
     }
 
-    if (board->port_power_gpio_base < 0) {
-        /* Port power control not available (74HC595 gpiochip not found) */
+    if (board->port_power_iio_count == 0) {
         return MESA_RC_NOT_IMPLEMENTED;
     }
 
-    /* Only the first 16 ports have power control */
     if (port_no >= PORT_POWER_COUNT) {
         *enabled = FALSE;
         return MESA_RC_OK;
     }
 
-    int gpio_num = board->port_power_gpio_base + port_no;
+    int dev_idx = port_no / 8;
+    int bit     = port_no % 8;
 
-    /* Read actual GPIO state from sysfs */
-    if (!pcb8398_port_power_gpio_get(inst, gpio_num, enabled)) {
+    if (dev_idx >= board->port_power_iio_count) {
+        *enabled = FALSE;
+        return MESA_RC_OK;
+    }
+
+    /* Read live state from kernel driver */
+    int mask = pcb8398_iio_port_power_read(inst, board->port_power_iio_path[dev_idx]);
+    if (mask >= 0) {
+        /* Update cache */
+        board->port_power_state = (board->port_power_state & ~(0xFFU << (dev_idx * 8)))
+                                | ((uint16_t)mask << (dev_idx * 8));
+        *enabled = (mask & (1U << bit)) ? TRUE : FALSE;
+    } else {
         /* Fall back to cached state */
         *enabled = (board->port_power_state & (1U << port_no)) ? TRUE : FALSE;
         T_D(inst, "Port %u: using cached state: %s", port_no, *enabled ? "ON" : "OFF");
