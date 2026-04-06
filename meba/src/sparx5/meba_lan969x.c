@@ -259,9 +259,9 @@ static void pcb8398_port_power_init(meba_inst_t inst)
             break;
         }
 
-        char pp_path[256];
+        char pp_path[PATH_MAX];
         snprintf(pp_path, sizeof(pp_path),
-                 "/sys/bus/iio/devices/%s/port_power", ep->d_name);
+                 "/sys/bus/iio/devices/%.240s/port_power", ep->d_name);
 
         if (access(pp_path, R_OK | W_OK) != 0) {
             continue;
@@ -270,7 +270,7 @@ static void pcb8398_port_power_init(meba_inst_t inst)
         /* Found one - store the base IIO device path */
         snprintf(board->port_power_iio_path[board->port_power_iio_count],
                  sizeof(board->port_power_iio_path[0]),
-                 "/sys/bus/iio/devices/%s", ep->d_name);
+                 "/sys/bus/iio/devices/%.100s", ep->d_name);
 
         T_I(inst, "Port power IIO device[%d]: %s",
             board->port_power_iio_count,
