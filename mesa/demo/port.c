@@ -1407,8 +1407,6 @@ static void cli_cmd_port_power(cli_req_t *req)
             }
             if (rc == MESA_RC_OK) {
                 cli_printf("%-6u%s\n", uport, enabled ? "ON" : "OFF");
-            } else {
-                cli_printf("%-6u%s\n", uport, "N/A");
             }
         }
     }
