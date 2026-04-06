@@ -281,6 +281,15 @@ static void pcb8398_port_power_init(meba_inst_t inst)
 
     closedir(dp);
 
+    /* Sort paths so iio:device0 < iio:device1 (ensures adc@0=ports 0-7, adc@1=ports 8-15) */
+    if (board->port_power_iio_count == 2 &&
+        strcmp(board->port_power_iio_path[0], board->port_power_iio_path[1]) > 0) {
+        char tmp[128];
+        memcpy(tmp, board->port_power_iio_path[0], sizeof(tmp));
+        memcpy(board->port_power_iio_path[0], board->port_power_iio_path[1], sizeof(tmp));
+        memcpy(board->port_power_iio_path[1], tmp, sizeof(tmp));
+    }
+
     if (board->port_power_iio_count == 0) {
         T_I(inst, "No IIO devices with port_power found - power control unavailable");
         return;
