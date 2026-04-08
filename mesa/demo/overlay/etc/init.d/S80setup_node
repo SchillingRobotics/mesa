@@ -1,0 +1,18 @@
+#!/bin/sh
+
+SCRIPT="/mnt/schilling/setup_node.sh"
+
+case "$1" in
+    start)
+        if [ -x "$SCRIPT" ]; then
+            printf "Running setup_node.sh: "
+            "$SCRIPT" && echo "OK" || echo "FAIL"
+        fi
+        ;;
+    stop)
+        ;;
+    *)
+        echo "Usage: $0 {start|stop}"
+        exit 1
+        ;;
+esac
