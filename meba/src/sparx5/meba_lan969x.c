@@ -151,136 +151,49 @@ static mesa_bool_t pcb8398_sfp_gpio_has_port(meba_inst_t inst, mesa_port_no_t po
 }
 
 /* ============================================================================
- * Port Power Control via 74HC595 shift registers (Linux gpiolib sysfs)
+ * Port Power Control via fast-fuse driver sysfs interface
  *
- * The 74HC595 GPIO expander is exposed as a gpiochip in /sys/class/gpio/.
- * We find its base GPIO number by scanning for label "74hc595", then access
- * individual port power GPIOs via sysfs.
+ * The fast-fuse kernel driver exclusively owns the 74HC595 port power GPIOs
+ * and exposes a bitmask interface at /sys/devices/platform/fast-fuse/.
  * ============================================================================
  */
 
-/**
- * Find the base GPIO number of the 74HC595 gpiochip.
- * Returns the base number, or -1 if not found.
- */
-static int pcb8398_port_power_find_gpiochip(meba_inst_t inst)
-{
-    DIR           *dp;
-    struct dirent *ep;
-    int            base = -1;
-
-    dp = opendir("/sys/class/gpio/");
-    if (dp == NULL) {
-        T_I(inst, "Cannot open /sys/class/gpio/");
-        return -1;
-    }
-
-    while ((ep = readdir(dp)) != NULL) {
-        if (strncmp(ep->d_name, "gpiochip", 8) != 0) {
-            continue;
-        }
-
-        char label_path[512];
-        snprintf(label_path, sizeof(label_path), "/sys/class/gpio/%s/label", ep->d_name);
-
-        int fd = open(label_path, O_RDONLY);
-        if (fd < 0) {
-            continue;
-        }
-
-        char label[64] = {0};
-        ssize_t n = read(fd, label, sizeof(label) - 1);
-        close(fd);
-
-        if (n <= 0) {
-            continue;
-        }
-
-        /* Remove trailing newline */
-        if (n > 0 && label[n - 1] == '\n') {
-            label[n - 1] = '\0';
-        }
-
-        if (strstr(label, "74hc595") != NULL || strstr(label, "74x164") != NULL) {
-            /* Found it - read base number */
-            char base_path[512];
-            snprintf(base_path, sizeof(base_path), "/sys/class/gpio/%s/base", ep->d_name);
-
-            fd = open(base_path, O_RDONLY);
-            if (fd >= 0) {
-                char buf[32] = {0};
-                if (read(fd, buf, sizeof(buf) - 1) > 0) {
-                    base = atoi(buf);
-                }
-                close(fd);
-            }
-            T_I(inst, "Found 74HC595 port power gpiochip: %s, base=%d", ep->d_name, base);
-            break;
-        }
-    }
-
-    closedir(dp);
-    return base;
-}
+#define FAST_FUSE_SYSFS_PATH "/sys/devices/platform/fast-fuse"
 
 /**
- * Export a GPIO to sysfs if not already exported.
+ * Read a hex u16 from a fast-fuse sysfs attribute.
  */
-static mesa_bool_t pcb8398_port_power_gpio_export(meba_inst_t inst, int gpio_num)
+static mesa_bool_t fast_fuse_read_mask(meba_inst_t inst, const char *attr, uint16_t *mask)
 {
-    char gpio_path[64];
-    snprintf(gpio_path, sizeof(gpio_path), "/sys/class/gpio/gpio%d", gpio_num);
+    char path[128];
+    snprintf(path, sizeof(path), "%s/%s", FAST_FUSE_SYSFS_PATH, attr);
 
-    /* Check if already exported */
-    if (access(gpio_path, F_OK) == 0) {
-        return TRUE;
-    }
-
-    /* Export it */
-    int fd = open("/sys/class/gpio/export", O_WRONLY);
+    int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        T_E(inst, "Cannot open /sys/class/gpio/export");
+        T_E(inst, "Cannot open %s", path);
         return FALSE;
     }
 
-    char buf[16];
-    int len = snprintf(buf, sizeof(buf), "%d", gpio_num);
-    ssize_t written = write(fd, buf, len);
+    char buf[16] = {0};
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
 
-    if (written != len) {
-        T_E(inst, "Failed to export GPIO %d", gpio_num);
+    if (n <= 0) {
+        T_E(inst, "Failed to read %s", path);
         return FALSE;
     }
 
-    /* Brief delay for sysfs to create the node */
-    usleep(10000);
-
-    /* Set direction to output (if direction file exists).
-     * Output-only expanders like 74HC595 may not have a direction file
-     * since they are inherently output-only. */
-    snprintf(gpio_path, sizeof(gpio_path), "/sys/class/gpio/gpio%d/direction", gpio_num);
-    fd = open(gpio_path, O_WRONLY);
-    if (fd >= 0) {
-        written = write(fd, "out", 3);
-        close(fd);
-        if (written != 3) {
-            T_E(inst, "Failed to set GPIO %d direction", gpio_num);
-            return FALSE;
-        }
-    }
-    /* If direction file doesn't exist, that's OK for output-only expanders */
-
+    *mask = (uint16_t)strtoul(buf, NULL, 0);
     return TRUE;
 }
 
 /**
- * Set a port power GPIO value.
+ * Write a hex u16 to a fast-fuse sysfs attribute.
  */
-static mesa_bool_t pcb8398_port_power_gpio_set(meba_inst_t inst, int gpio_num, mesa_bool_t value)
+static mesa_bool_t fast_fuse_write_mask(meba_inst_t inst, const char *attr, uint16_t mask)
 {
-    char path[64];
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", gpio_num);
+    char path[128];
+    snprintf(path, sizeof(path), "%s/%s", FAST_FUSE_SYSFS_PATH, attr);
 
     int fd = open(path, O_WRONLY);
     if (fd < 0) {
@@ -288,44 +201,16 @@ static mesa_bool_t pcb8398_port_power_gpio_set(meba_inst_t inst, int gpio_num, m
         return FALSE;
     }
 
-    const char *val_str = value ? "1" : "0";
-    ssize_t written = write(fd, val_str, 1);
+    char buf[16];
+    int len = snprintf(buf, sizeof(buf), "0x%04x", mask);
+    ssize_t written = write(fd, buf, len);
     close(fd);
 
-    T_D(inst, "GPIO %d: wrote '%s', result=%zd", gpio_num, val_str, written);
-    return (written == 1);
+    return (written == len);
 }
 
 /**
- * Read a port power GPIO value.
- */
-static mesa_bool_t pcb8398_port_power_gpio_get(meba_inst_t inst, int gpio_num, mesa_bool_t *value)
-{
-    char path[64];
-    snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", gpio_num);
-
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        T_E(inst, "Cannot open %s for reading", path);
-        return FALSE;
-    }
-
-    char buf[4] = {0};
-    ssize_t bytes_read = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-
-    if (bytes_read <= 0) {
-        T_E(inst, "Failed to read GPIO %d value", gpio_num);
-        return FALSE;
-    }
-
-    *value = (buf[0] == '1') ? TRUE : FALSE;
-    T_D(inst, "GPIO %d: read '%c' -> %s", gpio_num, buf[0], *value ? "ON" : "OFF");
-    return TRUE;
-}
-
-/**
- * Initialize port power control: find gpiochip and export all GPIOs.
+ * Initialize port power control via fast-fuse driver.
  */
 static void pcb8398_port_power_init(meba_inst_t inst)
 {
@@ -334,24 +219,22 @@ static void pcb8398_port_power_init(meba_inst_t inst)
     board->port_power_gpio_base = -1;
     board->port_power_state = 0;
 
-    int base = pcb8398_port_power_find_gpiochip(inst);
-    if (base < 0) {
-        T_I(inst, "74HC595 port power gpiochip not found - power control unavailable");
+    /* Check that the fast-fuse driver probed successfully */
+    if (access(FAST_FUSE_SYSFS_PATH "/power_mask", F_OK) != 0) {
+        T_I(inst, "Fast-fuse driver not available - port power control unavailable");
         return;
     }
 
-    board->port_power_gpio_base = base;
+    /* Mark as available (use 0 as sentinel since we don't need a real gpio base) */
+    board->port_power_gpio_base = 0;
 
-    /* Export all 16 GPIOs and set initial state to OFF */
-    for (int i = 0; i < PORT_POWER_COUNT; i++) {
-        if (!pcb8398_port_power_gpio_export(inst, base + i)) {
-            T_E(inst, "Failed to export port power GPIO %d", i);
-        }
-        /* Set initial state to OFF */
-        pcb8398_port_power_gpio_set(inst, base + i, FALSE);
-    }
+    /* Enable fast fuse for all 16 ports */
+    fast_fuse_write_mask(inst, "enable_mask", 0xffff);
 
-    T_I(inst, "Port power control initialized with gpio base %d", base);
+    /* Ensure all ports start powered off */
+    fast_fuse_write_mask(inst, "power_mask", 0x0000);
+
+    T_I(inst, "Port power control initialized via fast-fuse driver");
 }
 
 /**
@@ -367,30 +250,27 @@ static mesa_rc lan969x_port_power_set(meba_inst_t inst, mesa_port_no_t port_no, 
     meba_board_state_t *board = INST2BOARD(inst);
 
     if (board->port_power_gpio_base < 0) {
-        /* Port power control not available (74HC595 gpiochip not found) */
         return MESA_RC_NOT_IMPLEMENTED;
     }
 
-    /* Only the first 16 ports have power control */
     if (port_no >= PORT_POWER_COUNT) {
-        return MESA_RC_OK;  /* Not an error, just no power control for this port */
+        return MESA_RC_OK;
     }
 
-    int gpio_num = board->port_power_gpio_base + port_no;
-
-    if (!pcb8398_port_power_gpio_set(inst, gpio_num, enable)) {
-        T_E(inst, "Failed to set port %u power to %s", port_no, enable ? "ON" : "OFF");
-        return MESA_RC_ERROR;
-    }
-
-    /* Update state tracking */
+    /* Update cached state and write full mask to fast-fuse driver */
     if (enable) {
         board->port_power_state |= (1U << port_no);
     } else {
         board->port_power_state &= ~(1U << port_no);
     }
 
-    T_I(inst, "Port %u power %s (gpio %d)", port_no, enable ? "ON" : "OFF", gpio_num);
+    if (!fast_fuse_write_mask(inst, "power_mask", (uint16_t)board->port_power_state)) {
+        T_E(inst, "Failed to set port %u power to %s", port_no, enable ? "ON" : "OFF");
+        return MESA_RC_ERROR;
+    }
+
+    T_I(inst, "Port %u power %s (mask=0x%04x)", port_no, enable ? "ON" : "OFF",
+        board->port_power_state);
     return MESA_RC_OK;
 }
 
@@ -411,25 +291,21 @@ static mesa_rc lan969x_port_power_get(meba_inst_t inst, mesa_port_no_t port_no, 
     }
 
     if (board->port_power_gpio_base < 0) {
-        /* Port power control not available (74HC595 gpiochip not found) */
         return MESA_RC_NOT_IMPLEMENTED;
     }
 
-    /* Only the first 16 ports have power control */
     if (port_no >= PORT_POWER_COUNT) {
         *enabled = FALSE;
         return MESA_RC_OK;
     }
 
-    int gpio_num = board->port_power_gpio_base + port_no;
-
-    /* Read actual GPIO state from sysfs */
-    if (!pcb8398_port_power_gpio_get(inst, gpio_num, enabled)) {
-        /* Fall back to cached state */
-        *enabled = (board->port_power_state & (1U << port_no)) ? TRUE : FALSE;
-        T_D(inst, "Port %u: using cached state: %s", port_no, *enabled ? "ON" : "OFF");
+    /* Read current mask from fast-fuse driver */
+    uint16_t mask;
+    if (fast_fuse_read_mask(inst, "power_mask", &mask)) {
+        board->port_power_state = mask;
     }
 
+    *enabled = (board->port_power_state & (1U << port_no)) ? TRUE : FALSE;
     return MESA_RC_OK;
 }
 
