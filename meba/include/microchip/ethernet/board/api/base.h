@@ -121,24 +121,6 @@ typedef mesa_rc (*meba_port_admin_state_set_t)(struct meba_inst              *in
                                                mesa_port_no_t                 port_no,
                                                const meba_port_admin_state_t *state);
 
-// Control 24V port power (board-specific, e.g., PCB8398 with 74HC595 shift registers).
-// port_no   [IN] The port number to configure (0-15 for power control).
-// enable    [IN] TRUE to enable port power, FALSE to disable.
-// Returns MESA_RC_OK on success, MESA_RC_ERROR on failure, or
-// MESA_RC_NOT_IMPLEMENTED if port power control is not available.
-typedef mesa_rc (*meba_port_power_set_t)(struct meba_inst *inst,
-                                         mesa_port_no_t    port_no,
-                                         mesa_bool_t       enable);
-
-// Get 24V port power status (board-specific).
-// port_no   [IN] The port number to query (0-15 for power control).
-// enabled   [OUT] Current power state: TRUE if enabled, FALSE if disabled.
-// Returns MESA_RC_OK on success, MESA_RC_ERROR on failure, or
-// MESA_RC_NOT_IMPLEMENTED if port power control is not available.
-typedef mesa_rc (*meba_port_power_get_t)(struct meba_inst *inst,
-                                         mesa_port_no_t    port_no,
-                                         mesa_bool_t      *enabled);
-
 // Update a status LED according to provided data.
 // type      [IN] The LED type.
 // color     [IN] The LED color to set.
@@ -232,8 +214,6 @@ typedef struct {
     meba_sfp_insertion_status_get_t meba_sfp_insertion_status_get;
     meba_sfp_status_get_t           meba_sfp_status_get;
     meba_port_admin_state_set_t     meba_port_admin_state_set;
-    meba_port_power_set_t           meba_port_power_set;
-    meba_port_power_get_t           meba_port_power_get;
     meba_status_led_set_t           meba_status_led_set;
     meba_port_led_update_t          meba_port_led_update;
     meba_led_mode_set_t             meba_led_mode_set;
@@ -264,8 +244,6 @@ typedef struct {
     X(meba_sfp_insertion_status_get)                                                               \
     X(meba_sfp_status_get)                                                                         \
     X(meba_port_admin_state_set)                                                                   \
-    X(meba_port_power_set)                                                                         \
-    X(meba_port_power_get)                                                                         \
     X(meba_status_led_set)                                                                         \
     X(meba_port_led_update)                                                                        \
     X(meba_led_mode_set)                                                                           \

@@ -21,9 +21,6 @@
 
 #define INDYPHY_INTERRUPT 11
 
-/* Number of ports with 24V power control via 74HC595 shift registers */
-#define PORT_POWER_COUNT 16
-
 /* Local mapping table */
 typedef struct {
     int32_t                chip_port;
@@ -150,176 +147,19 @@ static mesa_bool_t pcb8398_sfp_gpio_has_port(meba_inst_t inst, mesa_port_no_t po
     return pcb8398_sfp_gpio_map_get(inst, port_no) != NULL;
 }
 
-/* ============================================================================
- * Port Power Control via fast-fuse driver sysfs interface
- *
- * The fast-fuse kernel driver exclusively owns the 74HC595 port power GPIOs
- * and exposes a bitmask interface at /sys/devices/platform/fast-fuse/.
- * ============================================================================
- */
 
-#define FAST_FUSE_SYSFS_PATH "/sys/devices/platform/fast-fuse"
-
-/**
- * Read a hex u16 from a fast-fuse sysfs attribute.
- */
-static mesa_bool_t fast_fuse_read_mask(meba_inst_t inst, const char *attr, uint16_t *mask)
-{
-    char path[128];
-    snprintf(path, sizeof(path), "%s/%s", FAST_FUSE_SYSFS_PATH, attr);
-
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        T_E(inst, "Cannot open %s", path);
-        return FALSE;
-    }
-
-    char buf[16] = {0};
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-
-    if (n <= 0) {
-        T_E(inst, "Failed to read %s", path);
-        return FALSE;
-    }
-
-    *mask = (uint16_t)strtoul(buf, NULL, 0);
-    return TRUE;
-}
-
-/**
- * Write a hex u16 to a fast-fuse sysfs attribute.
- */
-static mesa_bool_t fast_fuse_write_mask(meba_inst_t inst, const char *attr, uint16_t mask)
-{
-    char path[128];
-    snprintf(path, sizeof(path), "%s/%s", FAST_FUSE_SYSFS_PATH, attr);
-
-    int fd = open(path, O_WRONLY);
-    if (fd < 0) {
-        T_E(inst, "Cannot open %s for writing", path);
-        return FALSE;
-    }
-
-    char buf[16];
-    int len = snprintf(buf, sizeof(buf), "0x%04x", mask);
-    ssize_t written = write(fd, buf, len);
-    close(fd);
-
-    return (written == len);
-}
-
-/**
- * Initialize port power control via fast-fuse driver.
- */
-static void pcb8398_port_power_init(meba_inst_t inst)
-{
-    meba_board_state_t *board = INST2BOARD(inst);
-
-    board->port_power_gpio_base = -1;
-    board->port_power_state = 0;
-
-    /* Check that the fast-fuse driver probed successfully */
-    if (access(FAST_FUSE_SYSFS_PATH "/power_mask", F_OK) != 0) {
-        T_I(inst, "Fast-fuse driver not available - port power control unavailable");
-        return;
-    }
-
-    /* Mark as available (use 0 as sentinel since we don't need a real gpio base) */
-    board->port_power_gpio_base = 0;
-
-    /* Enable fast fuse for all 16 ports */
-    fast_fuse_write_mask(inst, "enable_mask", 0xffff);
-
-    /* Ensure all ports start powered off */
-    fast_fuse_write_mask(inst, "power_mask", 0x0000);
-
-    T_I(inst, "Port power control initialized via fast-fuse driver");
-}
-
-/**
- * Set port power state (MEBA API wrapper).
- * port_no: logical port number (0-15 for port power control)
- * enable: TRUE to enable 24V power, FALSE to disable
- * Returns: MESA_RC_OK on success,
- *          MESA_RC_NOT_IMPLEMENTED if port power control not available,
- *          MESA_RC_ERROR on failure.
- */
-static mesa_rc lan969x_port_power_set(meba_inst_t inst, mesa_port_no_t port_no, mesa_bool_t enable)
-{
-    meba_board_state_t *board = INST2BOARD(inst);
-
-    if (board->port_power_gpio_base < 0) {
-        return MESA_RC_NOT_IMPLEMENTED;
-    }
-
-    if (port_no >= PORT_POWER_COUNT) {
-        return MESA_RC_OK;
-    }
-
-    /* Update cached state and write full mask to fast-fuse driver */
-    if (enable) {
-        board->port_power_state |= (1U << port_no);
-    } else {
-        board->port_power_state &= ~(1U << port_no);
-    }
-
-    if (!fast_fuse_write_mask(inst, "power_mask", (uint16_t)board->port_power_state)) {
-        T_E(inst, "Failed to set port %u power to %s", port_no, enable ? "ON" : "OFF");
-        return MESA_RC_ERROR;
-    }
-
-    T_I(inst, "Port %u power %s (mask=0x%04x)", port_no, enable ? "ON" : "OFF",
-        board->port_power_state);
-    return MESA_RC_OK;
-}
-
-/**
- * Get port power state (MEBA API).
- * port_no: logical port number (0-15 for port power control)
- * enabled: [OUT] current power state
- * Returns: MESA_RC_OK on success,
- *          MESA_RC_NOT_IMPLEMENTED if port power control not available,
- *          MESA_RC_ERROR on failure.
- */
-static mesa_rc lan969x_port_power_get(meba_inst_t inst, mesa_port_no_t port_no, mesa_bool_t *enabled)
-{
-    meba_board_state_t *board = INST2BOARD(inst);
-
-    if (enabled == NULL) {
-        return MESA_RC_ERROR;
-    }
-
-    if (board->port_power_gpio_base < 0) {
-        return MESA_RC_NOT_IMPLEMENTED;
-    }
-
-    if (port_no >= PORT_POWER_COUNT) {
-        *enabled = FALSE;
-        return MESA_RC_OK;
-    }
-
-    /* Read current mask from fast-fuse driver */
-    uint16_t mask;
-    if (fast_fuse_read_mask(inst, "power_mask", &mask)) {
-        board->port_power_state = mask;
-    }
-
-    *enabled = (board->port_power_state & (1U << port_no)) ? TRUE : FALSE;
-    return MESA_RC_OK;
-}
 
 static port_map_t *meba_port_map = NULL;
 
 static port_map_t port_table_pcb8398[] = {
     /* Physical ports 1-4: chip_port 16-19 (QSGMII group C, MIIM addr 0-3) */
-    {16, MESA_MIIM_CONTROLLER_0,    0,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
+    {16, MESA_MIIM_CONTROLLER_0,    4,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
     MESA_BW_1G,                                                                                                     0,  0, 1, 0, 0 },
-    {17, MESA_MIIM_CONTROLLER_0,    1,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
+    {17, MESA_MIIM_CONTROLLER_0,    5,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
     MESA_BW_1G,                                                                                                     0,  0, 1, 0, 0 },
-    {18, MESA_MIIM_CONTROLLER_0,    2,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
+    {18, MESA_MIIM_CONTROLLER_0,    6,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
     MESA_BW_1G,                                                                                                     0,  0, 1, 0, 0 },
-    {19, MESA_MIIM_CONTROLLER_0,    3,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
+    {19, MESA_MIIM_CONTROLLER_0,    7,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
     MESA_BW_1G,                                                                                                     0,  0, 1, 0, 0 },
     /* Physical ports 5-8: chip_port 8-11 (QSGMII group A, MIIM addr 8-11) */
     {8,  MESA_MIIM_CONTROLLER_0,    8,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
@@ -1022,8 +862,7 @@ meba_inst_t lan969x_initialize(meba_inst_t inst, const meba_board_interface_t *c
     default: break;
     }
 
-    /* Initialize 24V port power control (PCB8398 only) */
-    pcb8398_port_power_init(inst);
+
 
     T_I(inst, "Board: %s, type %d, target %4x, mux %d, %d ports", inst->props.name, board->type,
         inst->props.target, inst->props.mux_mode, board->port_cnt);
@@ -1038,8 +877,6 @@ meba_inst_t lan969x_initialize(meba_inst_t inst, const meba_board_interface_t *c
     inst->api.meba_sfp_insertion_status_get = lan969x_sfp_insertion_status_get;
     inst->api.meba_sfp_status_get = lan969x_sfp_status_get;
     inst->api.meba_port_admin_state_set = lan969x_port_admin_state_set;
-    inst->api.meba_port_power_set = lan969x_port_power_set;
-    inst->api.meba_port_power_get = lan969x_port_power_get;
     inst->api.meba_port_led_update = lan969x_port_led_update;
     inst->api.meba_led_intensity_set = NULL;
     inst->api.meba_fan_param_get = NULL;
