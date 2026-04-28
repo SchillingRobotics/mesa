@@ -1,0 +1,15 @@
+#!/bin/sh
+# Respawn wrapper for schilling-node-app.
+# Restarts the application after an unexpected exit, with a brief delay
+# to prevent rapid restart loops.
+
+# TODO(Trevor): Change back to /usr/bin/schilling-node-app for production
+DAEMON=/mnt/schilling/schilling-node-app
+RESPAWN_DELAY_SECS=3
+
+while true; do
+    "$DAEMON"
+    rc=$?
+    logger -t schilling-node-app "exited with code $rc, restarting in ${RESPAWN_DELAY_SECS}s"
+    sleep "$RESPAWN_DELAY_SECS"
+done
