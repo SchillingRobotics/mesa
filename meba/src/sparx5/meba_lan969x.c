@@ -153,13 +153,13 @@ static port_map_t *meba_port_map = NULL;
 
 static port_map_t port_table_pcb8398[] = {
     /* Physical ports 1-4: chip_port 16-19 (QSGMII group C, MIIM addr 0-3) */
-    {16, MESA_MIIM_CONTROLLER_0,    4,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
+    {16, MESA_MIIM_CONTROLLER_0,    0,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
     MESA_BW_1G,                                                                                                     0,  0, 1, 0, 0 },
-    {17, MESA_MIIM_CONTROLLER_0,    5,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
+    {17, MESA_MIIM_CONTROLLER_0,    1,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
     MESA_BW_1G,                                                                                                     0,  0, 1, 0, 0 },
-    {18, MESA_MIIM_CONTROLLER_0,    6,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
+    {18, MESA_MIIM_CONTROLLER_0,    2,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
     MESA_BW_1G,                                                                                                     0,  0, 1, 0, 0 },
-    {19, MESA_MIIM_CONTROLLER_0,    7,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
+    {19, MESA_MIIM_CONTROLLER_0,    3,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
     MESA_BW_1G,                                                                                                     0,  0, 1, 0, 0 },
     /* Physical ports 5-8: chip_port 8-11 (QSGMII group A, MIIM addr 8-11) */
     {8,  MESA_MIIM_CONTROLLER_0,    8,  MESA_PORT_INTERFACE_QSGMII,     MEBA_PORT_CAP_TRI_SPEED_COPPER,
