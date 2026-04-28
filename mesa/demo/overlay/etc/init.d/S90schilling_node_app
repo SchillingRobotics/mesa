@@ -1,0 +1,24 @@
+#!/bin/sh
+
+DAEMON=/usr/bin/schilling-node-app-wrapper
+PIDFILE=/var/run/schilling-node-app.pid
+
+case "$1" in
+    start)
+        printf "Starting schilling-node-app: "
+        start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON" && echo "OK" || echo "FAIL"
+        ;;
+    stop)
+        printf "Stopping schilling-node-app: "
+        start-stop-daemon -K -p "$PIDFILE" && echo "OK" || echo "FAIL"
+        rm -f "$PIDFILE"
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
