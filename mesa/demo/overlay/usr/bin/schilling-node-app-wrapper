@@ -7,6 +7,13 @@
 DAEMON=/mnt/schilling/schilling-node-app
 RESPAWN_DELAY_SECS=3
 
+# Verify the app binary exists before entering the respawn loop
+if [ ! -x "$DAEMON" ]; then
+    logger -t schilling-node-app "ERROR: $DAEMON not found or not executable"
+    echo "ERROR: $DAEMON not found or not executable" >&2
+    exit 1
+fi
+
 # Redirect output to console so log messages are visible
 exec > /dev/console 2>&1
 

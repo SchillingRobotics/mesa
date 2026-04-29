@@ -6,12 +6,22 @@ PIDFILE=/var/run/schilling-node-app.pid
 case "$1" in
     start)
         printf "Starting schilling-node-app... "
-        start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON" && echo "OK" || echo "FAILED"
+        if start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON"; then
+            echo "OK"
+        else
+            echo "FAILED"
+            exit 1
+        fi
         ;;
     stop)
         printf "Stopping schilling-node-app... "
-        start-stop-daemon -K -p "$PIDFILE" && echo "done" || echo "FAILED"
-        rm -f "$PIDFILE"
+        if start-stop-daemon -K -p "$PIDFILE" -x "$DAEMON"; then
+            echo "done"
+            rm -f "$PIDFILE"
+        else
+            echo "FAILED"
+            exit 1
+        fi
         ;;
     restart)
         "$0" stop
