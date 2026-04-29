@@ -7,9 +7,19 @@
 DAEMON=/mnt/schilling/schilling-node-app
 RESPAWN_DELAY_SECS=3
 
+# Redirect output to console so log messages are visible
+exec > /dev/console 2>&1
+
+# Trap SIGTERM/SIGINT to cleanly stop the app and exit
+APP_PID=
+trap 'kill $APP_PID 2>/dev/null; exit 0' TERM INT
+
 while true; do
-    "$DAEMON"
+    "$DAEMON" &
+    APP_PID=$!
+    wait $APP_PID
     rc=$?
+    APP_PID=
     logger -t schilling-node-app "exited with code $rc, restarting in ${RESPAWN_DELAY_SECS}s"
     sleep "$RESPAWN_DELAY_SECS"
 done
