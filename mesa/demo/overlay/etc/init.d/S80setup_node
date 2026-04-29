@@ -1,11 +1,17 @@
 #!/bin/sh
 
+# This script should be called from /etc/init.d/ to run the setup_node.sh script on startup
+# The setup_node.sh script needs to be manually copied to the target, since it lives on a different partition than the FIT image.
+#
+# To incorporate this script into the image, add the code below to an overlay in the MESA repository, at:
+#    mesa/demo/overlay/etc/init.d/S80setup_node
+
 SCRIPT="/mnt/schilling/setup_node.sh"
 
 case "$1" in
     start)
         if [ -x "$SCRIPT" ]; then
-            printf "Running setup_node.sh: "
+            printf "Running setup_node.sh... "
             "$SCRIPT" && echo "OK" || echo "FAIL"
         fi
         ;;
