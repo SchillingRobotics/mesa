@@ -15,8 +15,8 @@ case "$1" in
         ;;
     stop)
         printf "Stopping schilling-node-app... "
-        if start-stop-daemon -K -p "$PIDFILE" -x "$DAEMON"; then
-            echo "done"
+        if start-stop-daemon -K -p "$PIDFILE"; then
+            echo "OK"
             rm -f "$PIDFILE"
         else
             echo "FAILED"
