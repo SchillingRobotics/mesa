@@ -5,6 +5,7 @@ PIDFILE=/var/run/schilling-node-app.pid
 
 case "$1" in
     start)
+        mkdir -p /mnt/schilling/log
         printf "Starting schilling-node-app... "
         if start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON"; then
             echo "OK"
