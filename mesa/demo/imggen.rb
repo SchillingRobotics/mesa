@@ -547,6 +547,7 @@ def basic_rootfs install_dir
     sys "mv #{install_dir}/etc/init.pool/rcK        #{install_dir}/etc/init.d/."
     sys "mv #{install_dir}/etc/init.pool/S01syslogd #{install_dir}/etc/init.d/."
     sys "mv #{install_dir}/etc/init.pool/S02klogd   #{install_dir}/etc/init.d/."
+    sys "mv #{install_dir}/etc/init.pool/S50dropbear #{install_dir}/etc/init.d/."
 
     $o[:install].each do |i|
         install i, install_dir
