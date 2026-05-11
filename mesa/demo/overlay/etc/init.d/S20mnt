@@ -11,7 +11,7 @@ MMC=$(sgdisk -p /dev/mmcblk0 | grep "Data" | sed -r 's/^\s*([0-9]+).*Data/\1/')
 if [ -e "/dev/mmcblk0p$MMC" ]; then
     case "$1" in
         start|"")
-            if mount /dev/mmcblk0p$MMC /mnt; then
+            if mount -o sync /dev/mmcblk0p$MMC /mnt; then
                 echo "/dev/mmcblk0p$MMC mounted at /mnt"
             else
                 echo "FAILED to mount /dev/mmcblk0p$MMC at /mnt"
