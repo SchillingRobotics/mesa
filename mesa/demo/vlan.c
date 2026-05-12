@@ -41,6 +41,34 @@ static void cli_cmd_vlan_del(cli_req_t *req)
     (void)mesa_vlan_port_members_set(NULL, req->vid, &member);
 }
 
+static void cli_cmd_vlan_include(cli_req_t *req)
+{
+    mesa_port_no_t   iport;
+    mesa_port_list_t member;
+
+    if (mesa_vlan_port_members_get(NULL, req->vid, &member) != MESA_RC_OK)
+        return;
+    for (iport = 0; iport < mesa_port_cnt(NULL); iport++) {
+        if (req->port_list[iport2uport(iport)])
+            mesa_port_list_set(&member, iport, 1);
+    }
+    (void)mesa_vlan_port_members_set(NULL, req->vid, &member);
+}
+
+static void cli_cmd_vlan_exclude(cli_req_t *req)
+{
+    mesa_port_no_t   iport;
+    mesa_port_list_t member;
+
+    if (mesa_vlan_port_members_get(NULL, req->vid, &member) != MESA_RC_OK)
+        return;
+    for (iport = 0; iport < mesa_port_cnt(NULL); iport++) {
+        if (req->port_list[iport2uport(iport)])
+            mesa_port_list_set(&member, iport, 0);
+    }
+    (void)mesa_vlan_port_members_set(NULL, req->vid, &member);
+}
+
 typedef enum {
     CLI_CMD_VLAN_TYPE,
     CLI_CMD_VLAN_PVID,
@@ -152,6 +180,8 @@ static void cli_cmd_vlan_port_filter(cli_req_t *req)
 static cli_cmd_t cli_cmd_table[] = {
     {"VLAN Add <vid> <port_list>",                      "Add VLAN",                           cli_cmd_vlan_add      },
     {"VLAN Delete <vid>",                               "Delete VLAN",                        cli_cmd_vlan_del      },
+    {"VLAN Include <vid> <port_list>",                  "Add ports to VLAN",                  cli_cmd_vlan_include  },
+    {"VLAN Exclude <vid> <port_list>",                  "Remove ports from VLAN",             cli_cmd_vlan_exclude  },
     {"VLAN Type [<port_list>] [unaware|c-port|s-port]", "Set or show VLAN port type",
      cli_cmd_vlan_port_type                                                                                         },
     {"VLAN PVID [<port_list>] [<vid>]",                 "Set or show port VLAN ID",           cli_cmd_vlan_port_pvid},
