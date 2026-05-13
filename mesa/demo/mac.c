@@ -41,6 +41,51 @@ static void cli_cmd_mac_add(cli_req_t *req)
     mesa_mac_table_add(NULL, &entry);
 }
 
+static void cli_cmd_mac_include(cli_req_t *req)
+{
+    mesa_mac_table_entry_t entry;
+    int                    i;
+    mesa_port_no_t         iport;
+    mac_cli_req_t         *mreq = req->module_req;
+
+    memset(&entry, 0, sizeof(entry));
+    entry.vid_mac.vid = req->vid;
+    for (i = 0; i < 6; i++) {
+        entry.vid_mac.mac.addr[i] = mreq->mac[i];
+    }
+    if (mesa_mac_table_get(NULL, &entry.vid_mac, &entry) != MESA_RC_OK) {
+        /* Entry does not exist — create it with the requested ports */
+        entry.locked = 1;
+        memset(&entry.destination, 0, sizeof(entry.destination));
+    }
+    for (iport = 0; iport < mesa_port_cnt(NULL); iport++) {
+        if (req->port_list[iport2uport(iport)])
+            mesa_port_list_set(&entry.destination, iport, 1);
+    }
+    mesa_mac_table_add(NULL, &entry);
+}
+
+static void cli_cmd_mac_exclude(cli_req_t *req)
+{
+    mesa_mac_table_entry_t entry;
+    int                    i;
+    mesa_port_no_t         iport;
+    mac_cli_req_t         *mreq = req->module_req;
+
+    memset(&entry, 0, sizeof(entry));
+    entry.vid_mac.vid = req->vid;
+    for (i = 0; i < 6; i++) {
+        entry.vid_mac.mac.addr[i] = mreq->mac[i];
+    }
+    if (mesa_mac_table_get(NULL, &entry.vid_mac, &entry) != MESA_RC_OK)
+        return; /* Nothing to remove from */
+    for (iport = 0; iport < mesa_port_cnt(NULL); iport++) {
+        if (req->port_list[iport2uport(iport)])
+            mesa_port_list_set(&entry.destination, iport, 0);
+    }
+    mesa_mac_table_add(NULL, &entry);
+}
+
 static void cli_cmd_mac_del(cli_req_t *req)
 {
     mesa_vid_mac_t vid_mac;
@@ -112,12 +157,14 @@ static void cli_cmd_mac_age_time(cli_req_t *req)
 }
 
 static cli_cmd_t cli_cmd_table[] = {
-    {"MAC Add <mac_addr> <port_list> [<vid>]", "Add MAC address table entry",             cli_cmd_mac_add     },
-    {"MAC Delete <mac_addr> [<vid>]",          "Delete MAC address entry",                cli_cmd_mac_del     },
-    {"MAC Lookup <mac_addr> [<vid>]",          "Lookup MAC address entry",                cli_cmd_mac_lookup  },
-    {"MAC Dump",                               "Show sorted list of MAC address entries", cli_cmd_mac_dump    },
-    {"MAC Flush",                              "Flush all learned entries",               cli_cmd_mac_flush   },
-    {"MAC Agetime [<age_time>]",               "Set or show the MAC address age timer",   cli_cmd_mac_age_time},
+    {"MAC Add <mac_addr> <port_list> [<vid>]",     "Add MAC address table entry",             cli_cmd_mac_add     },
+    {"MAC Include <mac_addr> <port_list> [<vid>]",  "Add ports to MAC address entry",          cli_cmd_mac_include },
+    {"MAC Exclude <mac_addr> <port_list> [<vid>]",  "Remove ports from MAC address entry",     cli_cmd_mac_exclude },
+    {"MAC Delete <mac_addr> [<vid>]",              "Delete MAC address entry",                cli_cmd_mac_del     },
+    {"MAC Lookup <mac_addr> [<vid>]",              "Lookup MAC address entry",                cli_cmd_mac_lookup  },
+    {"MAC Dump",                                   "Show sorted list of MAC address entries", cli_cmd_mac_dump    },
+    {"MAC Flush",                                  "Flush all learned entries",               cli_cmd_mac_flush   },
+    {"MAC Agetime [<age_time>]",                   "Set or show the MAC address age timer",   cli_cmd_mac_age_time},
 };
 
 static int cli_parm_mac(cli_req_t *req)
