@@ -44,18 +44,20 @@ static void cli_cmd_mac_add(cli_req_t *req)
 static void cli_cmd_mac_include(cli_req_t *req)
 {
     mesa_mac_table_entry_t entry;
+    mesa_vid_mac_t         vid_mac;
     int                    i;
     mesa_port_no_t         iport;
     mac_cli_req_t         *mreq = req->module_req;
 
     memset(&entry, 0, sizeof(entry));
-    entry.vid_mac.vid = req->vid;
+    vid_mac.vid = req->vid;
     for (i = 0; i < 6; i++) {
-        entry.vid_mac.mac.addr[i] = mreq->mac[i];
+        vid_mac.mac.addr[i] = mreq->mac[i];
     }
-    if (mesa_mac_table_get(NULL, &entry.vid_mac, &entry) != MESA_RC_OK) {
+    if (mesa_mac_table_get(NULL, &vid_mac, &entry) != MESA_RC_OK) {
         /* Entry does not exist — create it with the requested ports */
         entry.locked = 1;
+        entry.vid_mac = vid_mac;
         memset(&entry.destination, 0, sizeof(entry.destination));
     }
     for (iport = 0; iport < mesa_port_cnt(NULL); iport++) {
@@ -68,16 +70,17 @@ static void cli_cmd_mac_include(cli_req_t *req)
 static void cli_cmd_mac_exclude(cli_req_t *req)
 {
     mesa_mac_table_entry_t entry;
+    mesa_vid_mac_t         vid_mac;
     int                    i;
     mesa_port_no_t         iport;
     mac_cli_req_t         *mreq = req->module_req;
 
     memset(&entry, 0, sizeof(entry));
-    entry.vid_mac.vid = req->vid;
+    vid_mac.vid = req->vid;
     for (i = 0; i < 6; i++) {
-        entry.vid_mac.mac.addr[i] = mreq->mac[i];
+        vid_mac.mac.addr[i] = mreq->mac[i];
     }
-    if (mesa_mac_table_get(NULL, &entry.vid_mac, &entry) != MESA_RC_OK)
+    if (mesa_mac_table_get(NULL, &vid_mac, &entry) != MESA_RC_OK)
         return; /* Nothing to remove from */
     for (iport = 0; iport < mesa_port_cnt(NULL); iport++) {
         if (req->port_list[iport2uport(iport)])
